@@ -147,18 +147,16 @@ function parseFlow(input: string): FlowDoc {
 }
 
 async function callProvider(config: ProviderConfig, prompt: string, signal?: AbortSignal) {
-  const base = config.baseUrl.replace(/\/$/, "");
-  const endpoint = base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
-
-  const response = await fetch(endpoint, {
+  const response = await fetch("/api/complete", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
       model: config.model,
-      messages: [{ role: "user", content: prompt }],
+      prompt,
       temperature: 0.7
     }),
     signal
@@ -166,14 +164,11 @@ async function callProvider(config: ProviderConfig, prompt: string, signal?: Abo
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Provider request failed (${response.status}). ${text.slice(0, 180)}`);
+    throw new Error(`Provider request failed (${response.status}). ${text.slice(0, 260)}`);
   }
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-
-  const content = data.choices?.[0]?.message?.content;
+  const data = (await response.json()) as { content?: string };
+  const content = data.content;
   if (!content) {
     throw new Error("Provider response had no message content.");
   }
@@ -212,6 +207,7 @@ export default function PlaygroundPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -418,7 +414,7 @@ export default function PlaygroundPage() {
       </div>
 
       <div className="playground-layout" style={{ position: "relative" }}>
-        <section className="pane">
+        <section className="pane pane-right">
           <div className="pane-header">
             <button
               className="btn-secondary"
@@ -504,14 +500,24 @@ export default function PlaygroundPage() {
                     <label className="label" htmlFor="api-key">
                       API Key
                     </label>
-                    <input
-                      id="api-key"
-                      type="password"
-                      value={config.apiKey}
-                      onChange={(event) =>
-                        setConfig((prev) => ({ ...prev, apiKey: event.target.value }))
-                      }
-                    />
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        id="api-key"
+                        type={showApiKey ? "text" : "password"}
+                        value={config.apiKey}
+                        onChange={(event) =>
+                          setConfig((prev) => ({ ...prev, apiKey: event.target.value }))
+                        }
+                      />
+                      <button
+                        className="btn-secondary"
+                        type="button"
+                        onClick={() => setShowApiKey((prev) => !prev)}
+                        style={{ minWidth: 88, padding: "8px 10px" }}
+                      >
+                        {showApiKey ? "Hide" : "Show"}
+                      </button>
+                    </div>
                   </div>
                   <div className="field">
                     <label className="label" htmlFor="model">
@@ -526,7 +532,7 @@ export default function PlaygroundPage() {
                     />
                   </div>
                   <p className="mono-value" style={{ margin: 0 }}>
-                    BYOK mode: keys stay in your browser session.
+                    BYOK mode: key is forwarded to server runtime per request and not persisted.
                   </p>
                 </div>
               ) : null}

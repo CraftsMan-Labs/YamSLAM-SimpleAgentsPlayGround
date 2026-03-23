@@ -287,6 +287,10 @@ select:focus-visible {
   min-height: 0;
 }
 
+.pane-right {
+  position: relative;
+}
+
 .pane-header {
   display: flex;
   justify-content: space-between;
@@ -387,14 +391,15 @@ textarea {
 }
 
 .chat-drawer {
-  position: absolute;
-  right: var(--space-12);
-  top: 180px;
+  position: fixed;
+  right: var(--space-20);
+  bottom: var(--space-20);
   width: min(360px, calc(100% - 24px));
   border: 1px solid var(--dark-ink);
   border-radius: var(--radius-card-md);
   background: #fff;
   box-shadow: 0 12px 30px rgba(15, 17, 20, 0.15);
+  z-index: 30;
 }
 
 .chat-header {
