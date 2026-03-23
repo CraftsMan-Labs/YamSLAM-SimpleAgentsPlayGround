@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import type { ReactNode } from "react";
+import craftsmanLogo from "./assets/CraftsmanLabs.svg";
 import "./globals.css";
 
 const jetBrainsMono = JetBrains_Mono({
@@ -9,8 +10,13 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "YamSLAM",
-  description: "SimpleAgents playground for YAML-first browser automation"
+  title: "SimpleAgents - YamSLAM",
+  description: "SimpleAgents playground for YAML-first AgentFactory",
+  icons: {
+    icon: craftsmanLogo.src,
+    shortcut: craftsmanLogo.src,
+    apple: craftsmanLogo.src
+  }
 };
 
 export default function RootLayout({
