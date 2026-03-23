@@ -628,13 +628,25 @@ textarea {
   position: fixed;
   right: var(--space-20);
   bottom: var(--space-20);
-  width: min(520px, calc(100vw - 24px));
-  max-height: min(640px, 84vh);
+  width: min(620px, calc(100vw - 24px));
+  max-height: min(760px, 88vh);
   border: 1px solid var(--dark-ink);
   border-radius: var(--radius-card-md);
   background: var(--panel-bg);
   box-shadow: 0 12px 30px rgba(15, 17, 20, 0.15);
   z-index: 30;
+  transition: width 180ms ease;
+}
+
+.chat-drawer.collapsed {
+  width: 44px;
+  max-height: 44px;
+}
+
+.chat-drawer.collapsed .chat-header {
+  padding: 6px;
+  border-bottom: 0;
+  justify-content: center;
 }
 
 .chat-header {
@@ -645,8 +657,28 @@ textarea {
   border-bottom: 1px solid var(--dark-ink);
 }
 
+.chat-header-icon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--dark-ink);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-strong);
+  background: var(--panel-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-header-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
 .chat-body {
-  max-height: min(430px, 58vh);
+  max-height: min(560px, 68vh);
   overflow: auto;
   padding: var(--space-12);
   display: grid;
@@ -736,6 +768,10 @@ textarea {
     width: 100%;
     margin-top: var(--space-12);
     max-height: none;
+  }
+
+  .chat-drawer.collapsed {
+    width: 44px;
   }
 
   .chat-body {

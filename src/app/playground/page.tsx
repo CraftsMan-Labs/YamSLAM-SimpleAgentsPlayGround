@@ -1199,17 +1199,35 @@ export default function PlaygroundPage() {
             })}
           </div>
 
-          <div className="chat-drawer">
+          <div className={`chat-drawer ${chatOpen ? "expanded" : "collapsed"}`}>
             <div className="chat-header">
-              <span className="label">Chat</span>
               <button
-                className="btn-secondary"
-                style={{ padding: "4px 10px", fontSize: 13 }}
-                onClick={() => setChatOpen((prev) => !prev)}
+                className="chat-header-icon"
                 type="button"
+                aria-label={chatOpen ? "Messages" : "Expand log"}
+                title={chatOpen ? "Messages" : "Expand log"}
+                onClick={() => {
+                  if (!chatOpen) {
+                    setChatOpen(true);
+                  }
+                }}
               >
-                {chatOpen ? "Collapse" : "Expand"}
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v7A1.5 1.5 0 0 0 2.5 12H4v2.2c0 .5.6.8 1 .5l3.6-2.7h4.9a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 2h-11Zm.5 3h10v1H3V5Zm0 2h7v1H3V7Zm0 2h5v1H3V9Z" />
+                </svg>
               </button>
+              {chatOpen ? (
+                <button
+                  className="btn-secondary"
+                  style={{ padding: "4px 10px", fontSize: 13 }}
+                  onClick={() => setChatOpen(false)}
+                  type="button"
+                  aria-label="Minimise"
+                  title="Minimise"
+                >
+                  -
+                </button>
+              ) : null}
             </div>
             {chatOpen ? (
               <>
