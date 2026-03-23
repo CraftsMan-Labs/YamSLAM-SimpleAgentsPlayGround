@@ -147,10 +147,16 @@ type ParsedThinkingContent = {
   thinking: string[];
 };
 
+type ExampleConfig = {
+  yaml?: string;
+  code: string;
+  sampleFile?: string;
+};
+
 const PROVIDER_CONFIG_CACHE_KEY = "yamslam.provider.config.v1";
 const THEME_MODE_CACHE_KEY = "yamslam.theme.mode.v1";
 
-const EXAMPLES: Record<string, { yaml: string; code: string }> = {
+const EXAMPLES: Record<string, ExampleConfig> = {
   "Quick hello": {
     yaml: `version: "1"
 steps:
@@ -203,10 +209,28 @@ steps:
     code: `function slugify(input) {
   return String(input).toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }`
+  },
+  "Email Chat Draft (graph sample)": {
+    sampleFile: "email-chat-draft-or-clarify.yaml",
+    code: `function identity(input) {
+  return input;
+}`
+  },
+  "Python Interview (graph sample)": {
+    sampleFile: "python-intern-fun-interview-system.yaml",
+    code: `function identity(input) {
+  return input;
+}`
+  },
+  "Quick hello (steps sample file)": {
+    sampleFile: "quick-hello-steps.yaml",
+    code: `function identity(input) {
+  return input;
+}`
   }
 };
 
-const DEFAULT_YAML = EXAMPLES["Quick hello"].yaml;
+const DEFAULT_YAML = EXAMPLES["Quick hello"].yaml ?? "";
 
 function safeString(value: unknown): string {
   if (typeof value === "string") {
@@ -824,11 +848,31 @@ export default function PlaygroundPage() {
     };
   }, [mermaidSource]);
 
-  const applyExample = (name: string) => {
+  const applyExample = async (name: string) => {
     const example = EXAMPLES[name];
     setSelectedExample(name);
-    setYamlInput(example.yaml);
     setCodeInput(example.code);
+
+    if (example.sampleFile !== undefined) {
+      try {
+        const response = await fetch(`/api/examples?name=${encodeURIComponent(example.sampleFile)}`);
+        if (!response.ok) {
+          throw new Error(`Could not load example file (${response.status}).`);
+        }
+        const payload = (await response.json()) as { yaml?: string };
+        if (typeof payload.yaml !== "string") {
+          throw new Error("Example API returned invalid payload.");
+        }
+        setYamlInput(payload.yaml);
+        setLogs([`Loaded example: ${name} (${example.sampleFile})`]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load sample file.";
+        setLogs([`Failed to load example: ${name}`, message]);
+      }
+      return;
+    }
+
+    setYamlInput(example.yaml ?? "");
     setLogs([`Loaded example: ${name}`]);
   };
 
@@ -1011,17 +1055,24 @@ export default function PlaygroundPage() {
       <div className="playground-layout" style={{ position: "relative" }}>
         <section className="pane pane-right">
           <div className="pane-header">
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                const names = Object.keys(EXAMPLES);
-                const nextIndex = (names.indexOf(selectedExample) + 1) % names.length;
-                applyExample(names[nextIndex]);
-              }}
-              type="button"
-            >
-              Examples ({selectedExample})
-            </button>
+            <div className="field" style={{ minWidth: 280, margin: 0 }}>
+              <label className="label" htmlFor="examples-select">
+                Examples
+              </label>
+              <select
+                id="examples-select"
+                value={selectedExample}
+                onChange={(event) => {
+                  void applyExample(event.target.value);
+                }}
+              >
+                {Object.keys(EXAMPLES).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="editor-stack">

@@ -1,0 +1,14 @@
+version: "1"
+steps:
+  - id: greet
+    type: set
+    key: user_name
+    value: "builder"
+
+  - id: ask
+    type: llm_call
+    prompt: "Say hello to {{user_name}} in one sentence."
+
+  - id: final
+    type: output
+    text: "Model says: {{ask}}"
