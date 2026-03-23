@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Client as WasmClient } from "simple-agents-wasm";
 import { parse } from "yaml";
 
 type ProviderConfig = {
@@ -9,6 +10,29 @@ type ProviderConfig = {
   apiKey: string;
   model: string;
 };
+
+type WasmCompletionResult = { content?: string };
+
+type WasmClientLike = {
+  complete: (model: string, promptOrMessages: string) => Promise<WasmCompletionResult>;
+};
+
+let wasmClientCache: { cacheKey: string; client: WasmClientLike } | null = null;
+
+async function loadWasmClient(config: ProviderConfig): Promise<WasmClientLike> {
+  const cacheKey = `${config.baseUrl}::${config.apiKey}`;
+  if (wasmClientCache !== null && wasmClientCache.cacheKey === cacheKey) {
+    return wasmClientCache.client;
+  }
+
+  const client = new WasmClient("openai", {
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey
+  });
+
+  wasmClientCache = { cacheKey, client };
+  return client;
+}
 
 type FlowStep = {
   id: string;
@@ -40,6 +64,8 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+
+const PROVIDER_CONFIG_CACHE_KEY = "yamslam.provider.config.v1";
 
 const EXAMPLES: Record<string, { yaml: string; code: string }> = {
   "Quick hello": {
@@ -106,6 +132,31 @@ function safeString(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function redactSecret(input: string, secret: string): string {
+  if (secret.trim().length === 0) {
+    return input;
+  }
+  return input.split(secret).join("[REDACTED_API_KEY]");
+}
+
+function normalizeProviderError(error: unknown, apiKey: string): string {
+  const fallback = "Provider request failed.";
+  const raw = error instanceof Error ? error.message : fallback;
+  const sanitized = redactSecret(raw, apiKey);
+  const lower = sanitized.toLowerCase();
+
+  if (
+    lower.includes("failed to fetch") ||
+    lower.includes("networkerror") ||
+    lower.includes("network error") ||
+    lower.includes("cors")
+  ) {
+    return "Network/CORS issue: this provider may block browser-origin requests.";
+  }
+
+  return sanitized;
+}
+
 function interpolate(template: unknown, context: Record<string, unknown>): unknown {
   if (typeof template !== "string") {
     return template;
@@ -146,33 +197,16 @@ function parseFlow(input: string): FlowDoc {
   };
 }
 
-async function callProvider(config: ProviderConfig, prompt: string, signal?: AbortSignal) {
-  const response = await fetch("/api/complete", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-      model: config.model,
-      prompt,
-      temperature: 0.7
-    }),
-    signal
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Provider request failed (${response.status}). ${text.slice(0, 260)}`);
-  }
-
-  const data = (await response.json()) as { content?: string };
-  const content = data.content;
+async function callProvider(
+  config: ProviderConfig,
+  prompt: string
+): Promise<string> {
+  const wasmClient = await loadWasmClient(config);
+  const wasmResult = await wasmClient.complete(config.model, prompt);
+  const content = wasmResult.content;
   if (!content) {
-    throw new Error("Provider response had no message content.");
+    throw new Error("WASM runtime response had no message content.");
   }
-
   return content;
 }
 
@@ -219,6 +253,37 @@ export default function PlaygroundPage() {
   });
 
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PROVIDER_CONFIG_CACHE_KEY);
+      if (raw === null) {
+        return;
+      }
+      const parsed = JSON.parse(raw) as Partial<ProviderConfig>;
+      if (
+        typeof parsed.baseUrl === "string" &&
+        typeof parsed.apiKey === "string" &&
+        typeof parsed.model === "string"
+      ) {
+        setConfig({
+          baseUrl: parsed.baseUrl,
+          apiKey: parsed.apiKey,
+          model: parsed.model
+        });
+      }
+    } catch {
+      // Ignore invalid cache payloads.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PROVIDER_CONFIG_CACHE_KEY, JSON.stringify(config));
+    } catch {
+      // Ignore storage write errors.
+    }
+  }, [config]);
 
   const parsedFlow = useMemo(() => {
     try {
@@ -286,7 +351,7 @@ export default function PlaygroundPage() {
             throw new Error("API key is required for llm_call steps.");
           }
           const prompt = safeString(interpolate(step.prompt ?? "", context));
-          const answer = await callProvider(config, prompt, abortRef.current.signal);
+          const answer = await callProvider(config, prompt);
           context[step.id] = answer;
         }
 
@@ -339,7 +404,7 @@ export default function PlaygroundPage() {
       setRunState("done");
       setLogs((prev) => [...prev, "Run complete."]);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Execution failed.";
+      const message = normalizeProviderError(error, config.apiKey);
       if (message.toLowerCase().includes("cors")) {
         setLogs((prev) => [
           ...prev,
@@ -388,7 +453,7 @@ export default function PlaygroundPage() {
         ...prev,
         {
           role: "assistant",
-          content: error instanceof Error ? error.message : "Chat request failed"
+          content: normalizeProviderError(error, config.apiKey)
         }
       ]);
     } finally {
@@ -532,7 +597,10 @@ export default function PlaygroundPage() {
                     />
                   </div>
                   <p className="mono-value" style={{ margin: 0 }}>
-                    BYOK mode: key is forwarded to server runtime per request and not persisted.
+                    BYOK mode: WASM-only in browser.
+                  </p>
+                  <p className="mono-value" style={{ margin: 0 }}>
+                    Runtime: simple-agents-wasm
                   </p>
                 </div>
               ) : null}

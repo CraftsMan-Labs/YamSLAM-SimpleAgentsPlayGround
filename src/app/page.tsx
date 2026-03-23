@@ -26,12 +26,11 @@ export default function HomePage() {
             Preview
           </div>
           <h3 style={{ marginTop: 12, color: "#f5f7fa" }}>
-            Powered by SimpleAgents Node runtime
+            Powered by SimpleAgents WASM runtime
           </h3>
           <p style={{ marginTop: 12, color: "#e5e7eb" }}>
-            Requests run through the YamSLAM server runtime using
-            `simple-agents-node`, with your BYOK credentials forwarded per
-            request.
+            Requests run directly in-browser using `simple-agents-wasm` with
+            your BYOK credentials.
           </p>
         </div>
       </section>
