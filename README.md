@@ -32,6 +32,6 @@ make verify
 
 ## Notes
 
-- Uses `simple-agents-node` in a Next.js Node runtime API route
+- Runtime adapter uses WASM-only browser execution via `simple-agents-wasm`
 - BYOK credentials are forwarded per request and are not stored by the app
 - Custom code editor allows inline JS/TS functions only (no imports)
