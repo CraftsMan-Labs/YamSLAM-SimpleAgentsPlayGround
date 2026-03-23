@@ -362,6 +362,31 @@ textarea {
   background: #fff;
 }
 
+.mermaid-view {
+  min-height: 220px;
+}
+
+.mermaid-view svg {
+  width: 100%;
+  height: auto;
+}
+
+.mermaid-source {
+  margin-top: var(--space-12);
+  border-top: 1px solid var(--dark-ink);
+  padding-top: var(--space-8);
+}
+
+.mermaid-source pre {
+  margin-top: var(--space-8);
+  margin-bottom: 0;
+  white-space: pre-wrap;
+  background: #f9fbfc;
+  border: 1px solid var(--dark-ink);
+  border-radius: 10px;
+  padding: 10px;
+}
+
 .flow-node {
   border: 1px solid var(--dark-ink);
   border-radius: 12px;

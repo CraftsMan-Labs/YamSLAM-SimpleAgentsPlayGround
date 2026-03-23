@@ -13,8 +13,13 @@ type ProviderConfig = {
 
 type WasmCompletionResult = { content?: string };
 
+type WasmMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+};
+
 type WasmClientLike = {
-  complete: (model: string, promptOrMessages: string) => Promise<WasmCompletionResult>;
+  complete: (model: string, promptOrMessages: string | WasmMessage[]) => Promise<WasmCompletionResult>;
 };
 
 let wasmClientCache: { cacheKey: string; client: WasmClientLike } | null = null;
@@ -56,6 +61,65 @@ type FlowStep = {
 type FlowDoc = {
   version: string;
   steps: FlowStep[];
+};
+
+type GraphEdge = {
+  from: string;
+  to: string;
+};
+
+type GraphLlmNode = {
+  id: string;
+  node_type: {
+    llm_call: {
+      model?: string;
+      messages_path?: string;
+      append_prompt_as_user?: boolean;
+    };
+  };
+  config?: {
+    prompt?: string;
+  };
+};
+
+type GraphSwitchNode = {
+  id: string;
+  node_type: {
+    switch: {
+      branches?: Array<{ condition?: string; target?: string }>;
+      default?: string;
+    };
+  };
+};
+
+type GraphCustomWorkerNode = {
+  id: string;
+  node_type: {
+    custom_worker: {
+      handler?: string;
+    };
+  };
+  config?: {
+    payload?: {
+      topic?: string;
+    };
+  };
+};
+
+type GraphNode = GraphLlmNode | GraphSwitchNode | GraphCustomWorkerNode;
+
+type GraphWorkflowDoc = {
+  id?: string;
+  version?: string;
+  entry_node: string;
+  nodes: GraphNode[];
+  edges?: GraphEdge[];
+};
+
+type MermaidEdge = {
+  from: string;
+  to: string;
+  label?: string;
 };
 
 type RunState = "idle" | "running" | "failed" | "done";
@@ -197,17 +261,342 @@ function parseFlow(input: string): FlowDoc {
   };
 }
 
+function sanitizeMermaidId(id: string): string {
+  let normalized = id;
+  const first = normalized.charAt(0);
+  if (!/^[A-Za-z_]$/.test(first)) {
+    normalized = `n_${normalized}`;
+  }
+  return normalized.replace(/[^A-Za-z0-9_]/g, "_");
+}
+
+function escapeMermaidLabel(label: string): string {
+  return label.replace(/"/g, '\\"');
+}
+
+function buildMermaidEdges(flow: FlowDoc): MermaidEdge[] {
+  const edges: MermaidEdge[] = [];
+
+  flow.steps.forEach((step, index) => {
+    const nextStep = flow.steps[index + 1];
+
+    if (step.type === "if") {
+      if (step.then) {
+        edges.push({ from: step.id, to: step.then, label: "true" });
+      }
+      if (step.else) {
+        edges.push({ from: step.id, to: step.else, label: "false" });
+      }
+    }
+
+    if (step.next) {
+      edges.push({ from: step.id, to: step.next });
+      return;
+    }
+
+    const hasExplicitBranch = step.type === "if" && (step.then !== undefined || step.else !== undefined);
+    if (!hasExplicitBranch && nextStep) {
+      edges.push({ from: step.id, to: nextStep.id });
+    }
+  });
+
+  return edges;
+}
+
+function flowToMermaid(flow: FlowDoc, activeStepId: string | null): string {
+  const lines: string[] = ["flowchart TD"];
+
+  flow.steps.forEach((step) => {
+    lines.push(
+      `  ${sanitizeMermaidId(step.id)}["${escapeMermaidLabel(step.id)}\\n(${escapeMermaidLabel(step.type)})"]`
+    );
+  });
+
+  buildMermaidEdges(flow).forEach((edge) => {
+    const from = sanitizeMermaidId(edge.from);
+    const to = sanitizeMermaidId(edge.to);
+    if (edge.label) {
+      lines.push(`  ${from} -- "${escapeMermaidLabel(edge.label)}" --> ${to}`);
+      return;
+    }
+    lines.push(`  ${from} --> ${to}`);
+  });
+
+  if (activeStepId) {
+    lines.push("  classDef activeNode fill:#fff2e8,stroke:#c9754b,stroke-width:2px;");
+    lines.push(`  class ${sanitizeMermaidId(activeStepId)} activeNode;`);
+  }
+
+  return lines.join("\n");
+}
+
+function graphFlowToMermaid(flow: GraphWorkflowDoc, activeStepId: string | null): string {
+  const lines: string[] = ["flowchart TD"];
+
+  flow.nodes.forEach((node) => {
+    const kind = Object.keys(node.node_type)[0] ?? "node";
+    lines.push(
+      `  ${sanitizeMermaidId(node.id)}["${escapeMermaidLabel(node.id)}\\n(${escapeMermaidLabel(kind)})"]`
+    );
+  });
+
+  (flow.edges ?? []).forEach((edge) => {
+    lines.push(`  ${sanitizeMermaidId(edge.from)} --> ${sanitizeMermaidId(edge.to)}`);
+  });
+
+  flow.nodes.forEach((node) => {
+    if (!("switch" in node.node_type)) {
+      return;
+    }
+    const spec = node.node_type.switch;
+    (spec.branches ?? []).forEach((branch, index) => {
+      if (!branch.target) {
+        return;
+      }
+      lines.push(
+        `  ${sanitizeMermaidId(node.id)} -- "route${index + 1}" --> ${sanitizeMermaidId(branch.target)}`
+      );
+    });
+    if (spec.default) {
+      lines.push(
+        `  ${sanitizeMermaidId(node.id)} -- "default" --> ${sanitizeMermaidId(spec.default)}`
+      );
+    }
+  });
+
+  if (activeStepId) {
+    lines.push("  classDef activeNode fill:#fff2e8,stroke:#c9754b,stroke-width:2px;");
+    lines.push(`  class ${sanitizeMermaidId(activeStepId)} activeNode;`);
+  }
+
+  return lines.join("\n");
+}
+
 async function callProvider(
   config: ProviderConfig,
-  prompt: string
+  promptOrMessages: string | WasmMessage[],
+  model?: string
 ): Promise<string> {
   const wasmClient = await loadWasmClient(config);
-  const wasmResult = await wasmClient.complete(config.model, prompt);
+  const wasmResult = await wasmClient.complete(model ?? config.model, promptOrMessages);
   const content = wasmResult.content;
   if (!content) {
     throw new Error("WASM runtime response had no message content.");
   }
   return content;
+}
+
+function parseGraphFlow(input: string): GraphWorkflowDoc {
+  const parsed = parse(input) as Partial<GraphWorkflowDoc>;
+  if (
+    parsed === null ||
+    parsed === undefined ||
+    typeof parsed !== "object" ||
+    typeof parsed.entry_node !== "string" ||
+    !Array.isArray(parsed.nodes)
+  ) {
+    throw new Error("Not a graph workflow document.");
+  }
+  return parsed as GraphWorkflowDoc;
+}
+
+function getValueFromPath(source: unknown, path: string): unknown {
+  if (source === null || source === undefined || typeof source !== "object") {
+    return undefined;
+  }
+  const parts = path.split(".").filter((token) => token.length > 0);
+  let current: unknown = source;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function interpolateGraphPrompt(template: string, context: Record<string, unknown>): string {
+  return template.replace(/{{\s*([^}]+)\s*}}/g, (_, token: string) => {
+    const resolved = getValueFromPath(context, token.trim());
+    if (resolved === undefined || resolved === null) {
+      return "";
+    }
+    if (typeof resolved === "string") {
+      return resolved;
+    }
+    return JSON.stringify(resolved);
+  });
+}
+
+function parsePossiblyJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    const start = value.indexOf("{");
+    const end = value.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      try {
+        return JSON.parse(value.slice(start, end + 1));
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+}
+
+function evaluateGraphSwitchCondition(
+  condition: string | undefined,
+  context: Record<string, unknown>
+): boolean {
+  if (!condition) {
+    return false;
+  }
+  const eq = condition.match(/^\$\.([A-Za-z0-9_\.]+)\s*==\s*"([\s\S]*)"$/);
+  if (eq) {
+    const left = getValueFromPath(context, eq[1]);
+    return String(left ?? "") === eq[2];
+  }
+  const ne = condition.match(/^\$\.([A-Za-z0-9_\.]+)\s*!=\s*"([\s\S]*)"$/);
+  if (ne) {
+    const left = getValueFromPath(context, ne[1]);
+    return String(left ?? "") !== ne[2];
+  }
+  return false;
+}
+
+function formatGraphChatOutput(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value !== null && value !== undefined && typeof value === "object") {
+    const v = value as Record<string, unknown>;
+    if (typeof v.question === "string") {
+      return v.question;
+    }
+    if (typeof v.message === "string") {
+      return v.message;
+    }
+    if (typeof v.body === "string" && typeof v.subject === "string") {
+      return `Subject: ${v.subject}\n\n${v.body}`;
+    }
+  }
+  return safeString(value);
+}
+
+async function executeGraphWorkflowForChat(
+  workflow: GraphWorkflowDoc,
+  inputMessages: ChatMessage[],
+  config: ProviderConfig
+): Promise<string> {
+  const nodeById = new Map<string, GraphNode>();
+  workflow.nodes.forEach((node) => nodeById.set(node.id, node));
+
+  const edgeMap = new Map<string, string[]>();
+  (workflow.edges ?? []).forEach((edge) => {
+    const existing = edgeMap.get(edge.from) ?? [];
+    existing.push(edge.to);
+    edgeMap.set(edge.from, existing);
+  });
+
+  const context: Record<string, unknown> = {
+    input: {
+      messages: inputMessages
+    },
+    nodes: {}
+  };
+
+  let pointer = workflow.entry_node;
+  let finalOutput: unknown = "";
+
+  for (let i = 0; i < 200; i += 1) {
+    const node = nodeById.get(pointer);
+    if (!node) {
+      throw new Error(`Workflow references unknown node '${pointer}'.`);
+    }
+
+    if ("llm_call" in node.node_type) {
+      const llmNode = node as GraphLlmNode;
+      const llm = llmNode.node_type.llm_call;
+      const prompt = interpolateGraphPrompt(llmNode.config?.prompt ?? "", context);
+      let promptOrMessages: string | WasmMessage[] = prompt;
+
+      if (llm.messages_path === "input.messages") {
+        const source = getValueFromPath(context, "input.messages");
+        const history = Array.isArray(source)
+          ? source
+              .map((msg) => {
+                if (msg && typeof msg === "object") {
+                  const role = (msg as Record<string, unknown>).role;
+                  const content = (msg as Record<string, unknown>).content;
+                  if (
+                    (role === "system" || role === "user" || role === "assistant" || role === "tool") &&
+                    typeof content === "string"
+                  ) {
+                    return { role, content } as WasmMessage;
+                  }
+                }
+                return null;
+              })
+              .filter((msg): msg is WasmMessage => msg !== null)
+          : [];
+
+        if (llm.append_prompt_as_user !== false) {
+          history.push({ role: "user", content: prompt });
+        }
+        promptOrMessages = history;
+      }
+
+      const content = await callProvider(config, promptOrMessages, llm.model);
+      const parsedOutput = parsePossiblyJson(content);
+      const nodesBucket = context.nodes as Record<string, unknown>;
+      nodesBucket[node.id] = { output: parsedOutput, raw: content };
+      finalOutput = parsedOutput;
+
+      const nextList = edgeMap.get(node.id) ?? [];
+      pointer = nextList[0] ?? "";
+      if (pointer.length === 0) {
+        break;
+      }
+      continue;
+    }
+
+    if ("switch" in node.node_type) {
+      const switchNode = node as GraphSwitchNode;
+      const spec = switchNode.node_type.switch;
+      const target = (spec.branches ?? []).find((branch) =>
+        evaluateGraphSwitchCondition(branch.condition, context)
+      )?.target;
+      pointer = target ?? spec.default ?? "";
+      if (pointer.length === 0) {
+        break;
+      }
+      continue;
+    }
+
+    if ("custom_worker" in node.node_type) {
+      const customNode = node as GraphCustomWorkerNode;
+      const topic = customNode.config?.payload?.topic ?? "custom_worker";
+      const message =
+        topic === "terminated" || topic === "already_terminated"
+          ? "Interview already terminated based on prior policy decision."
+          : `Custom worker executed for topic: ${topic}`;
+      const nodesBucket = context.nodes as Record<string, unknown>;
+      nodesBucket[node.id] = { output: { message } };
+      finalOutput = { message };
+
+      const nextList = edgeMap.get(node.id) ?? [];
+      pointer = nextList[0] ?? "";
+      if (pointer.length === 0) {
+        break;
+      }
+      continue;
+    }
+
+    throw new Error(`Unsupported node type at '${node.id}'.`);
+  }
+
+  return formatGraphChatOutput(finalOutput);
 }
 
 function evaluateCondition(
@@ -233,6 +622,39 @@ function evaluateCondition(
   return false;
 }
 
+function buildYamlAwareChatPrompt(input: {
+  yamlSource: string;
+  customCode: string;
+  userMessage: string;
+  history: ChatMessage[];
+}): string {
+  const historyBlock = input.history
+    .slice(-8)
+    .map((msg) => `${msg.role.toUpperCase()}: ${msg.content}`)
+    .join("\n");
+
+  const customCodeBlock = input.customCode.trim().length > 0 ? input.customCode : "(none)";
+
+  return [
+    "You are the YamSLAM playground assistant.",
+    "Answer the user using the workflow intent from the YAML flow below.",
+    "If the YAML is invalid or incomplete, state that clearly and still help with best effort.",
+    "Do not reveal secrets.",
+    "",
+    "YAML FLOW:",
+    input.yamlSource,
+    "",
+    "CUSTOM FUNCTIONS:",
+    customCodeBlock,
+    "",
+    "RECENT CHAT:",
+    historyBlock.length > 0 ? historyBlock : "(no prior messages)",
+    "",
+    `USER: ${input.userMessage}`,
+    "ASSISTANT:"
+  ].join("\n");
+}
+
 export default function PlaygroundPage() {
   const [yamlInput, setYamlInput] = useState(DEFAULT_YAML);
   const [codeInput, setCodeInput] = useState(EXAMPLES["Quick hello"].code);
@@ -246,6 +668,8 @@ export default function PlaygroundPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatPending, setChatPending] = useState(false);
+  const [flowSvg, setFlowSvg] = useState<string>("");
+  const [flowRenderError, setFlowRenderError] = useState<string | null>(null);
   const [config, setConfig] = useState<ProviderConfig>({
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
@@ -292,6 +716,66 @@ export default function PlaygroundPage() {
       return null;
     }
   }, [yamlInput]);
+
+  const parsedGraphFlow = useMemo(() => {
+    try {
+      return parseGraphFlow(yamlInput);
+    } catch {
+      return null;
+    }
+  }, [yamlInput]);
+
+  const mermaidSource = useMemo(() => {
+    if (parsedFlow !== null) {
+      return flowToMermaid(parsedFlow, activeStepId);
+    }
+    if (parsedGraphFlow !== null) {
+      return graphFlowToMermaid(parsedGraphFlow, activeStepId);
+    }
+    return "";
+  }, [activeStepId, parsedFlow, parsedGraphFlow]);
+
+  useEffect(() => {
+    if (mermaidSource.length === 0) {
+      setFlowSvg("");
+      setFlowRenderError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const renderDiagram = async () => {
+      try {
+        const mermaidModule = await import("mermaid");
+        const mermaid = mermaidModule.default;
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "neutral"
+        });
+
+        const id = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const rendered = await mermaid.render(id, mermaidSource);
+
+        if (!cancelled) {
+          setFlowSvg(rendered.svg);
+          setFlowRenderError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "Failed to render flow graph.";
+          setFlowRenderError(message);
+          setFlowSvg("");
+        }
+      }
+    };
+
+    void renderDiagram();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mermaidSource]);
 
   const applyExample = (name: string) => {
     const example = EXAMPLES[name];
@@ -443,10 +927,22 @@ export default function PlaygroundPage() {
 
     setChatInput("");
     setChatPending(true);
-    setChatMessages((prev) => [...prev, { role: "user", content: prompt }]);
+    const updatedMessages = [...chatMessages, { role: "user" as const, content: prompt }];
+    setChatMessages(updatedMessages);
 
     try {
-      const answer = await callProvider(config, prompt);
+      let answer: string;
+      if (parsedGraphFlow !== null) {
+        answer = await executeGraphWorkflowForChat(parsedGraphFlow, updatedMessages, config);
+      } else {
+        const yamlAwarePrompt = buildYamlAwareChatPrompt({
+          yamlSource: yamlInput,
+          customCode: codeInput,
+          userMessage: prompt,
+          history: updatedMessages
+        });
+        answer = await callProvider(config, yamlAwarePrompt);
+      }
       setChatMessages((prev) => [...prev, { role: "assistant", content: answer }]);
     } catch (error) {
       setChatMessages((prev) => [
@@ -608,23 +1104,20 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="flow-area">
-            {parsedFlow ? (
+            {parsedFlow || parsedGraphFlow ? (
               <>
-                {parsedFlow.steps.map((step, index) => (
-                  <div key={step.id}>
-                    <article
-                      className={`flow-node ${activeStepId === step.id ? "active" : ""}`}
-                    >
-                      <div className="label">{step.type}</div>
-                      <strong>{step.id}</strong>
-                      {step.prompt ? <p>{step.prompt}</p> : null}
-                      {step.text ? <p>{step.text}</p> : null}
-                    </article>
-                    {index < parsedFlow.steps.length - 1 ? (
-                      <div className="flow-arrow">v</div>
-                    ) : null}
-                  </div>
-                ))}
+                {flowRenderError ? (
+                  <p className="mono-value">{flowRenderError}</p>
+                ) : (
+                  <div
+                    className="mermaid-view"
+                    dangerouslySetInnerHTML={{ __html: flowSvg }}
+                  />
+                )}
+                <details className="mermaid-source">
+                  <summary className="label">Visualize output (Mermaid)</summary>
+                  <pre className="mono-value">{mermaidSource}</pre>
+                </details>
               </>
             ) : (
               <p>Flow visualizer appears when YAML is valid.</p>
@@ -658,10 +1151,12 @@ export default function PlaygroundPage() {
             </div>
             {chatOpen ? (
               <>
-                <div className="chat-body">
-                  {chatMessages.length === 0 ? (
-                    <p className="mono-value">Ask anything using current provider config.</p>
-                  ) : (
+                  <div className="chat-body">
+                    {chatMessages.length === 0 ? (
+                      <p className="mono-value">
+                        Ask anything. Chat responses are grounded in the current YAML flow.
+                      </p>
+                    ) : (
                     chatMessages.map((msg, index) => (
                       <div className={`msg ${msg.role}`} key={`${msg.role}-${index}`}>
                         {msg.content}
