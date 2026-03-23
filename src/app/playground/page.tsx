@@ -696,7 +696,7 @@ export default function PlaygroundPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatPending, setChatPending] = useState(false);
-  const [themeMode, setThemeMode] = useState<"light" | "dark">("light");
+  const [themeMode, setThemeMode] = useState<"light" | "dark">("dark");
   const [flowSvg, setFlowSvg] = useState<string>("");
   const [flowRenderError, setFlowRenderError] = useState<string | null>(null);
   const [config, setConfig] = useState<ProviderConfig>({
