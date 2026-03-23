@@ -1,9 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Client as WasmClient } from "simple-agents-wasm";
 import { parse } from "yaml";
+import craftsmanLogo from "../assets/CraftsmanLabs.svg";
+import craftsmanLogoWhite from "../assets/CraftsmanLabs-white.svg";
 
 type ProviderConfig = {
   baseUrl: string;
@@ -20,6 +23,15 @@ type WasmMessage = {
 
 type WasmClientLike = {
   complete: (model: string, promptOrMessages: string | WasmMessage[]) => Promise<WasmCompletionResult>;
+  streamEvents: (
+    model: string,
+    promptOrMessages: string | WasmMessage[],
+    onEvent: (event: {
+      eventType?: string;
+      delta?: { content?: string };
+      error?: { message?: string };
+    }) => void
+  ) => Promise<unknown>;
 };
 
 let wasmClientCache: { cacheKey: string; client: WasmClientLike } | null = null;
@@ -32,7 +44,8 @@ async function loadWasmClient(config: ProviderConfig): Promise<WasmClientLike> {
 
   const client = new WasmClient("openai", {
     baseUrl: config.baseUrl,
-    apiKey: config.apiKey
+    apiKey: config.apiKey,
+    fetchImpl: (input, init) => window.fetch(input, init)
   });
 
   wasmClientCache = { cacheKey, client };
@@ -129,7 +142,13 @@ type ChatMessage = {
   content: string;
 };
 
+type ParsedThinkingContent = {
+  visible: string;
+  thinking: string[];
+};
+
 const PROVIDER_CONFIG_CACHE_KEY = "yamslam.provider.config.v1";
+const THEME_MODE_CACHE_KEY = "yamslam.theme.mode.v1";
 
 const EXAMPLES: Record<string, { yaml: string; code: string }> = {
   "Quick hello": {
@@ -221,26 +240,16 @@ function normalizeProviderError(error: unknown, apiKey: string): string {
   return sanitized;
 }
 
-function interpolate(template: unknown, context: Record<string, unknown>): unknown {
-  if (typeof template !== "string") {
-    return template;
-  }
-
-  return template.replace(/{{\s*([^}]+)\s*}}/g, (_, token: string) => {
-    const key = token.trim();
-    return safeString(context[key] ?? "");
+function parseThinkingContent(content: string): ParsedThinkingContent {
+  const thinking: string[] = [];
+  const visible = content.replace(/<think>([\s\S]*?)<\/think>/gi, (_match, group: string) => {
+    thinking.push(group.trim());
+    return "";
   });
-}
-
-function sanitizeCode(source: string): string {
-  if (/\bimport\b|\brequire\b|\bfrom\b/.test(source)) {
-    throw new Error("Imports are not allowed. Use inline functions only.");
-  }
-
-  const withoutTypeDecl = source.replace(/\btype\s+[\s\S]*?;/g, "");
-  const withoutInterfaces = withoutTypeDecl.replace(/\binterface\s+[\s\S]*?\}/g, "");
-  const withoutTypeAnnotations = withoutInterfaces.replace(/:\s*[A-Za-z_][A-Za-z0-9_<>,\[\]\s|]*/g, "");
-  return withoutTypeAnnotations.replace(/\bexport\s+/g, "");
+  return {
+    visible: visible.trim(),
+    thinking: thinking.filter((chunk) => chunk.length > 0)
+  };
 }
 
 function parseFlow(input: string): FlowDoc {
@@ -372,18 +381,40 @@ function graphFlowToMermaid(flow: GraphWorkflowDoc, activeStepId: string | null)
   return lines.join("\n");
 }
 
-async function callProvider(
+async function callProviderStream(
   config: ProviderConfig,
   promptOrMessages: string | WasmMessage[],
-  model?: string
+  options?: {
+    model?: string;
+    onDelta?: (chunk: string, aggregate: string) => void;
+  }
 ): Promise<string> {
   const wasmClient = await loadWasmClient(config);
-  const wasmResult = await wasmClient.complete(model ?? config.model, promptOrMessages);
-  const content = wasmResult.content;
-  if (!content) {
-    throw new Error("WASM runtime response had no message content.");
+  let aggregate = "";
+  let streamError: string | null = null;
+
+  await wasmClient.streamEvents(options?.model ?? config.model, promptOrMessages, (event) => {
+    if (event?.eventType === "delta") {
+      const chunk = event.delta?.content;
+      if (typeof chunk === "string" && chunk.length > 0) {
+        aggregate += chunk;
+        options?.onDelta?.(chunk, aggregate);
+      }
+      return;
+    }
+
+    if (event?.eventType === "error") {
+      streamError = event.error?.message ?? "Stream failed.";
+    }
+  });
+
+  if (streamError) {
+    throw new Error(streamError);
   }
-  return content;
+  if (aggregate.length === 0) {
+    throw new Error("WASM streaming response had no message content.");
+  }
+  return aggregate;
 }
 
 function parseGraphFlow(input: string): GraphWorkflowDoc {
@@ -487,7 +518,12 @@ function formatGraphChatOutput(value: unknown): string {
 async function executeGraphWorkflowForChat(
   workflow: GraphWorkflowDoc,
   inputMessages: ChatMessage[],
-  config: ProviderConfig
+  config: ProviderConfig,
+  hooks?: {
+    onLog?: (line: string) => void;
+    onActiveStep?: (stepId: string | null) => void;
+    onStepStream?: (stepId: string, content: string) => void;
+  }
 ): Promise<string> {
   const nodeById = new Map<string, GraphNode>();
   workflow.nodes.forEach((node) => nodeById.set(node.id, node));
@@ -514,6 +550,9 @@ async function executeGraphWorkflowForChat(
     if (!node) {
       throw new Error(`Workflow references unknown node '${pointer}'.`);
     }
+
+    hooks?.onActiveStep?.(node.id);
+    hooks?.onLog?.(`Running step: ${node.id}`);
 
     if ("llm_call" in node.node_type) {
       const llmNode = node as GraphLlmNode;
@@ -547,8 +586,14 @@ async function executeGraphWorkflowForChat(
         promptOrMessages = history;
       }
 
-      const content = await callProvider(config, promptOrMessages, llm.model);
+      const content = await callProviderStream(config, promptOrMessages, {
+        model: llm.model,
+        onDelta: (_chunk, aggregate) => {
+          hooks?.onStepStream?.(node.id, aggregate);
+        }
+      });
       const parsedOutput = parsePossiblyJson(content);
+      hooks?.onLog?.(`Completed llm_call: ${node.id}`);
       const nodesBucket = context.nodes as Record<string, unknown>;
       nodesBucket[node.id] = { output: parsedOutput, raw: content };
       finalOutput = parsedOutput;
@@ -567,6 +612,7 @@ async function executeGraphWorkflowForChat(
       const target = (spec.branches ?? []).find((branch) =>
         evaluateGraphSwitchCondition(branch.condition, context)
       )?.target;
+      hooks?.onLog?.(`Switch route: ${target ?? spec.default ?? "(end)"}`);
       pointer = target ?? spec.default ?? "";
       if (pointer.length === 0) {
         break;
@@ -584,6 +630,7 @@ async function executeGraphWorkflowForChat(
       const nodesBucket = context.nodes as Record<string, unknown>;
       nodesBucket[node.id] = { output: { message } };
       finalOutput = { message };
+      hooks?.onLog?.(`Custom worker output: ${message}`);
 
       const nextList = edgeMap.get(node.id) ?? [];
       pointer = nextList[0] ?? "";
@@ -596,30 +643,10 @@ async function executeGraphWorkflowForChat(
     throw new Error(`Unsupported node type at '${node.id}'.`);
   }
 
+  hooks?.onActiveStep?.(null);
+  hooks?.onLog?.("Workflow run complete.");
+
   return formatGraphChatOutput(finalOutput);
-}
-
-function evaluateCondition(
-  condition: FlowStep["condition"],
-  context: Record<string, unknown>
-): boolean {
-  if (!condition) {
-    return false;
-  }
-
-  const left = interpolate(condition.left, context);
-  const right = interpolate(condition.right, context);
-
-  if (condition.operator === "eq") {
-    return left === right;
-  }
-  if (condition.operator === "ne") {
-    return left !== right;
-  }
-  if (condition.operator === "contains") {
-    return safeString(left).includes(safeString(right));
-  }
-  return false;
 }
 
 function buildYamlAwareChatPrompt(input: {
@@ -661,6 +688,7 @@ export default function PlaygroundPage() {
   const [selectedExample, setSelectedExample] = useState("Quick hello");
   const [runState, setRunState] = useState<RunState>("idle");
   const [logs, setLogs] = useState<string[]>([]);
+  const [stepStreams, setStepStreams] = useState<Record<string, string>>({});
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -668,6 +696,7 @@ export default function PlaygroundPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatPending, setChatPending] = useState(false);
+  const [themeMode, setThemeMode] = useState<"light" | "dark">("light");
   const [flowSvg, setFlowSvg] = useState<string>("");
   const [flowRenderError, setFlowRenderError] = useState<string | null>(null);
   const [config, setConfig] = useState<ProviderConfig>({
@@ -676,7 +705,25 @@ export default function PlaygroundPage() {
     model: "gpt-4o-mini"
   });
 
-  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(THEME_MODE_CACHE_KEY);
+      if (raw === "light" || raw === "dark") {
+        setThemeMode(raw);
+      }
+    } catch {
+      // Ignore storage read errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", themeMode);
+    try {
+      window.localStorage.setItem(THEME_MODE_CACHE_KEY, themeMode);
+    } catch {
+      // Ignore storage write errors.
+    }
+  }, [themeMode]);
 
   useEffect(() => {
     try {
@@ -785,132 +832,6 @@ export default function PlaygroundPage() {
     setLogs([`Loaded example: ${name}`]);
   };
 
-  const runFlow = async () => {
-    setLogs([]);
-    setRunState("running");
-
-    if (!config.baseUrl || !config.model) {
-      setRunState("failed");
-      setLogs(["Base URL and model are required."]);
-      return;
-    }
-
-    let flow: FlowDoc;
-    try {
-      flow = parseFlow(yamlInput);
-    } catch (error) {
-      setRunState("failed");
-      setLogs([error instanceof Error ? error.message : "Invalid YAML"]);
-      return;
-    }
-
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
-
-    const context: Record<string, unknown> = {};
-    const stepIndex = new Map(flow.steps.map((step, index) => [step.id, index]));
-    let pointer = 0;
-    let iterations = 0;
-
-    try {
-      while (pointer < flow.steps.length) {
-        iterations += 1;
-        if (iterations > 500) {
-          throw new Error("Execution stopped. Too many step transitions.");
-        }
-
-        const step = flow.steps[pointer];
-        setActiveStepId(step.id);
-        setLogs((prev) => [...prev, `Running step: ${step.id} (${step.type})`]);
-
-        if (step.type === "set") {
-          if (!step.key) {
-            throw new Error(`Step '${step.id}' is missing 'key'.`);
-          }
-          context[step.key] = interpolate(step.value, context);
-        }
-
-        if (step.type === "llm_call") {
-          if (!config.apiKey) {
-            throw new Error("API key is required for llm_call steps.");
-          }
-          const prompt = safeString(interpolate(step.prompt ?? "", context));
-          const answer = await callProvider(config, prompt);
-          context[step.id] = answer;
-        }
-
-        if (step.type === "if") {
-          const matched = evaluateCondition(step.condition, context);
-          const targetId = matched ? step.then : step.else;
-          if (targetId) {
-            const jumpTo = stepIndex.get(targetId);
-            if (jumpTo === undefined) {
-              throw new Error(`Step '${step.id}' points to unknown step '${targetId}'.`);
-            }
-            pointer = jumpTo;
-            continue;
-          }
-        }
-
-        if (step.type === "call_function") {
-          if (!step.function) {
-            throw new Error(`Step '${step.id}' is missing 'function'.`);
-          }
-
-          const runnableCode = sanitizeCode(codeInput);
-          const args = (interpolate(step.args ?? {}, context) ?? {}) as Record<string, unknown>;
-          const runner = new Function(
-            "input",
-            "context",
-            `${runnableCode}\nif (typeof ${step.function} !== "function") { throw new Error("Function '${step.function}' was not found."); }\nreturn ${step.function}(input, context);`
-          ) as (input: Record<string, unknown>, context: Record<string, unknown>) => unknown;
-          context[step.id] = runner(args, context);
-        }
-
-        if (step.type === "output") {
-          const rendered = safeString(interpolate(step.text ?? "", context));
-          context[step.id] = rendered;
-          setLogs((prev) => [...prev, `Output: ${rendered}`]);
-        }
-
-        if (step.next) {
-          const jumpTo = stepIndex.get(step.next);
-          if (jumpTo === undefined) {
-            throw new Error(`Step '${step.id}' points to unknown step '${step.next}'.`);
-          }
-          pointer = jumpTo;
-          continue;
-        }
-
-        pointer += 1;
-      }
-
-      setRunState("done");
-      setLogs((prev) => [...prev, "Run complete."]);
-    } catch (error) {
-      const message = normalizeProviderError(error, config.apiKey);
-      if (message.toLowerCase().includes("cors")) {
-        setLogs((prev) => [
-          ...prev,
-          "This provider may not allow browser-origin requests (CORS).",
-          message
-        ]);
-      } else {
-        setLogs((prev) => [...prev, message]);
-      }
-      setRunState("failed");
-    } finally {
-      setActiveStepId(null);
-    }
-  };
-
-  const stopRun = () => {
-    abortRef.current?.abort();
-    setRunState("idle");
-    setActiveStepId(null);
-    setLogs((prev) => [...prev, "Run aborted."]);
-  };
-
   const sendChat = async () => {
     const prompt = chatInput.trim();
     if (!prompt || chatPending) {
@@ -918,6 +839,8 @@ export default function PlaygroundPage() {
     }
 
     if (!config.apiKey || !config.baseUrl || !config.model) {
+      setRunState("failed");
+      setLogs((prev) => [...prev, "Missing provider config: baseUrl/apiKey/model"]);
       setChatMessages((prev) => [
         ...prev,
         { role: "assistant", content: "Add base URL, API key, and model first." }
@@ -927,49 +850,160 @@ export default function PlaygroundPage() {
 
     setChatInput("");
     setChatPending(true);
-    const updatedMessages = [...chatMessages, { role: "user" as const, content: prompt }];
+    setRunState("running");
+    setStepStreams({});
+    const historyForWorkflow: ChatMessage[] = [...chatMessages, { role: "user", content: prompt }];
+    const updatedMessages: ChatMessage[] = [...historyForWorkflow, { role: "assistant", content: "" }];
+    const assistantIndex = historyForWorkflow.length;
+    setLogs((prev) => [...prev, `Chat input: ${prompt}`]);
     setChatMessages(updatedMessages);
+
+    const setAssistantContent = (content: string) => {
+      setChatMessages((prev) => {
+        if (assistantIndex >= prev.length) {
+          return prev;
+        }
+        const next = [...prev];
+        next[assistantIndex] = { role: "assistant", content };
+        return next;
+      });
+    };
 
     try {
       let answer: string;
       if (parsedGraphFlow !== null) {
-        answer = await executeGraphWorkflowForChat(parsedGraphFlow, updatedMessages, config);
+        setLogs((prev) => [...prev, `Workflow mode: graph (${parsedGraphFlow.entry_node})`]);
+        answer = await executeGraphWorkflowForChat(parsedGraphFlow, historyForWorkflow, config, {
+          onLog: (line) => setLogs((prev) => [...prev, line]),
+          onActiveStep: (stepId) => setActiveStepId(stepId),
+          onStepStream: (stepId, content) => {
+            setStepStreams((prev) => ({ ...prev, [stepId]: content }));
+            setAssistantContent(`[${stepId}] ${content}`);
+          }
+        });
       } else {
+        setLogs((prev) => [...prev, "Workflow mode: prompt-grounded chat"]);
         const yamlAwarePrompt = buildYamlAwareChatPrompt({
           yamlSource: yamlInput,
           customCode: codeInput,
           userMessage: prompt,
-          history: updatedMessages
+          history: historyForWorkflow
         });
-        answer = await callProvider(config, yamlAwarePrompt);
+        answer = await callProviderStream(config, yamlAwarePrompt, {
+          onDelta: (_chunk, aggregate) => {
+            setStepStreams((prev) => ({ ...prev, chat_llm: aggregate }));
+            setAssistantContent(aggregate);
+          }
+        });
+        setLogs((prev) => [...prev, "Completed single llm_call from chat context"]);
       }
-      setChatMessages((prev) => [...prev, { role: "assistant", content: answer }]);
+      setAssistantContent(answer);
+      setRunState("done");
+      setLogs((prev) => [...prev, "Chat run complete."]);
     } catch (error) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: normalizeProviderError(error, config.apiKey)
-        }
-      ]);
+      const message = normalizeProviderError(error, config.apiKey);
+      setAssistantContent(message);
+      setRunState("failed");
+      setLogs((prev) => [...prev, `Run failed: ${message}`]);
     } finally {
       setChatPending(false);
+      setActiveStepId(null);
     }
   };
 
   return (
     <main className="playground-shell">
       <div className="pane-header" style={{ marginBottom: 16 }}>
-        <div>
-          <div className="label">YamSLAM Playground</div>
-          <h3>Browser-only YAML runtime</h3>
+        <div className="header-brand">
+          <Image
+            src={themeMode === "dark" ? craftsmanLogoWhite : craftsmanLogo}
+            alt="CraftsmanLabs logo"
+            className="header-logo"
+            priority
+          />
+          <div>
+            <div className="label">SimpleAgents Playground By CraftsmanLabs</div>
+            <h3>SIMPLEAGENTS PLAYGROUND BY CRAFTSMANLABS</h3>
+            <p className="mono-value" style={{ marginTop: 6 }}>
+              If you like this project, please star it. Feel free to reach out.
+            </p>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div className="header-links">
+          <button
+            className="icon-link"
+            type="button"
+            aria-label={themeMode === "light" ? "Enable dark mode" : "Enable light mode"}
+            title={themeMode === "light" ? "Dark mode" : "Light mode"}
+            onClick={() => {
+              setThemeMode((prev) => {
+                const next = prev === "light" ? "dark" : "light";
+                setLogs((current) => [...current, `Theme changed: ${next} mode`]);
+                return next;
+              });
+            }}
+          >
+            {themeMode === "light" ? (
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 1a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 1Zm0 10.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Zm0 3.75a.75.75 0 0 1-.75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A.75.75 0 0 1 8 15Zm7-7a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 15 8ZM4.25 8A.75.75 0 0 1 3.5 8.75H2a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 4.25 8Zm7.53-4.28a.75.75 0 0 1 1.06 0l1.06 1.06a.75.75 0 1 1-1.06 1.06L11.78 4.78a.75.75 0 0 1 0-1.06ZM3.16 12.84a.75.75 0 0 1 1.06 0l1.06 1.06a.75.75 0 1 1-1.06 1.06L3.16 13.9a.75.75 0 0 1 0-1.06Zm10.68 1.06a.75.75 0 0 1-1.06 1.06l-1.06-1.06a.75.75 0 1 1 1.06-1.06l1.06 1.06ZM5.28 5.84A.75.75 0 0 1 4.22 4.78L5.28 3.72a.75.75 0 1 1 1.06 1.06L5.28 5.84Z" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M6 0a8 8 0 1 0 8 8 6 6 0 0 1-8-8Z" />
+              </svg>
+            )}
+          </button>
+          <a
+            className="icon-link"
+            href="https://www.linkedin.com/in/rishub-c-r/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="LinkedIn profile"
+            title="LinkedIn"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M0 1.15C0 .52.52 0 1.15 0h13.7C15.48 0 16 .52 16 1.15v13.7c0 .63-.52 1.15-1.15 1.15H1.15A1.15 1.15 0 0 1 0 14.85V1.15ZM4.75 13V6.17H2.48V13h2.27ZM3.61 5.2c.79 0 1.28-.52 1.28-1.17-.01-.67-.49-1.17-1.27-1.17-.78 0-1.29.5-1.29 1.17 0 .65.5 1.17 1.27 1.17h.01ZM13.52 13V9.26c0-2-1.06-2.93-2.48-2.93-1.14 0-1.65.63-1.93 1.07v-0.92H6.84c.03.61 0 6.52 0 6.52h2.27V9.36c0-.19.01-.38.07-.52.15-.38.49-.78 1.06-.78.75 0 1.05.58 1.05 1.43V13h2.23Z" />
+            </svg>
+          </a>
+          <a
+            className="icon-link"
+            href="https://github.com/CraftsMan-Labs"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="GitHub organization"
+            title="GitHub"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 0a8 8 0 0 0-2.53 15.6c.4.08.54-.17.54-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.5-2.69-.95-.09-.23-.48-.95-.82-1.14-.28-.15-.68-.52 0-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.19 0 .21.14.47.55.38A8 8 0 0 0 8 0Z" />
+            </svg>
+          </a>
+          <a
+            className="icon-link"
+            href="https://github.com/CraftsMan-Labs/SimpleAgents"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="SimpleAgents repository"
+            title="Project GitHub"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 0a8 8 0 0 0-2.53 15.6c.4.08.54-.17.54-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.5-2.69-.95-.09-.23-.48-.95-.82-1.14-.28-.15-.68-.52 0-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.19 0 .21.14.47.55.38A8 8 0 0 0 8 0Z" />
+            </svg>
+          </a>
+          <a
+            className="icon-link"
+            href="https://docs.simpleagents.craftsmanlabs.net/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="SimpleAgents docs"
+            title="Docs"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M1.5 1A1.5 1.5 0 0 0 0 2.5v10A1.5 1.5 0 0 0 1.5 14H14V2.5A1.5 1.5 0 0 0 12.5 1h-11ZM14 15H1.5A2.5 2.5 0 0 1-1 12.5v-10A2.5 2.5 0 0 1 1.5 0h11A2.5 2.5 0 0 1 15 2.5V15h-1Z" />
+              <path d="M2.5 2.5h5v9h-5v-9Zm6 0h5v9h-5v-9Z" />
+            </svg>
+          </a>
           <Link href="/" className="state-link">
             Home
-          </Link>
-          <Link href="/reference" className="state-link">
-            Reference
           </Link>
         </div>
       </div>
@@ -988,7 +1022,6 @@ export default function PlaygroundPage() {
             >
               Examples ({selectedExample})
             </button>
-            <span className="label">Left pane</span>
           </div>
 
           <div className="editor-stack">
@@ -1015,25 +1048,14 @@ export default function PlaygroundPage() {
               />
             </div>
 
-            <div className="run-row" style={{ gap: 8 }}>
-              <button className="btn-secondary" type="button" onClick={stopRun}>
-                Stop
-              </button>
-              <button
-                className="btn-primary"
-                type="button"
-                disabled={runState === "running"}
-                onClick={runFlow}
-              >
-                {runState === "running" ? "Running..." : "Run"}
-              </button>
-            </div>
+            <p className="mono-value" style={{ margin: 0 }}>
+              Interaction mode: chat-only workflow execution.
+            </p>
           </div>
         </section>
 
         <section className="pane">
           <div className="pane-header">
-            <span className="label">Right pane</span>
             <div className="provider-box">
               <button
                 className="btn-secondary"
@@ -1096,6 +1118,12 @@ export default function PlaygroundPage() {
                     BYOK mode: WASM-only in browser.
                   </p>
                   <p className="mono-value" style={{ margin: 0 }}>
+                    Provider config is cached in your local browser storage.
+                  </p>
+                  <p className="mono-value" style={{ margin: 0 }}>
+                    Security note: please invalidate/revoke your API key after use.
+                  </p>
+                  <p className="mono-value" style={{ margin: 0 }}>
                     Runtime: simple-agents-wasm
                   </p>
                 </div>
@@ -1125,7 +1153,22 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="run-log">
-            <div className="label">Run Log ({runState})</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div className="label">Run Log ({runState})</div>
+              <button
+                className="btn-secondary"
+                type="button"
+                style={{ padding: "6px 10px", fontSize: 12 }}
+                onClick={() => {
+                  setLogs([]);
+                  setStepStreams({});
+                  setRunState("idle");
+                  setActiveStepId(null);
+                }}
+              >
+                Clear logs
+              </button>
+            </div>
             {logs.length === 0 ? (
               <p className="mono-value">No logs yet.</p>
             ) : (
@@ -1135,6 +1178,25 @@ export default function PlaygroundPage() {
                 </p>
               ))
             )}
+            {Object.entries(stepStreams).map(([stepId, streamText]) => {
+              const parsed = parseThinkingContent(streamText);
+              return (
+                <details key={stepId} className="stream-block" open>
+                  <summary className="label">Stream: {stepId}</summary>
+                  {parsed.visible.length > 0 ? (
+                    <p className="mono-value" style={{ marginTop: 8 }}>
+                      {parsed.visible}
+                    </p>
+                  ) : null}
+                  {parsed.thinking.map((chunk, idx) => (
+                    <details key={`${stepId}-think-${idx}`} className="think-block">
+                      <summary className="label">Thinking tokens ({idx + 1})</summary>
+                      <pre className="mono-value">{chunk}</pre>
+                    </details>
+                  ))}
+                </details>
+              );
+            })}
           </div>
 
           <div className="chat-drawer">
@@ -1157,11 +1219,26 @@ export default function PlaygroundPage() {
                         Ask anything. Chat responses are grounded in the current YAML flow.
                       </p>
                     ) : (
-                    chatMessages.map((msg, index) => (
-                      <div className={`msg ${msg.role}`} key={`${msg.role}-${index}`}>
-                        {msg.content}
-                      </div>
-                    ))
+                    chatMessages.map((msg, index) => {
+                      const parsed = msg.role === "assistant" ? parseThinkingContent(msg.content) : null;
+                      return (
+                        <div className={`msg ${msg.role}`} key={`${msg.role}-${index}`}>
+                          {parsed ? (
+                            <>
+                              <div>{parsed.visible || msg.content}</div>
+                              {parsed.thinking.map((chunk, idx) => (
+                                <details key={`${index}-think-${idx}`} className="think-block">
+                                  <summary className="label">Thinking tokens ({idx + 1})</summary>
+                                  <pre className="mono-value">{chunk}</pre>
+                                </details>
+                              ))}
+                            </>
+                          ) : (
+                            msg.content
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
                 <div className="chat-input">
