@@ -443,6 +443,33 @@ select:focus-visible {
   border-color: var(--dark-stroke);
 }
 
+.report-issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  border: 1px solid var(--dark-ink);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  color: var(--text-strong);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: 150ms ease;
+}
+
+.report-issue-link:hover {
+  border-color: var(--dark-stroke);
+  color: var(--primary-500);
+}
+
+.report-issue-link svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
 .icon-link {
   width: 38px;
   height: 38px;
@@ -836,6 +863,11 @@ textarea {
 
   .header-links {
     width: 100%;
+  }
+
+  .report-issue-link {
+    width: 100%;
+    justify-content: center;
   }
 
   .social-link {

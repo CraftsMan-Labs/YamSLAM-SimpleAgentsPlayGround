@@ -57,6 +57,20 @@ export default async function HomePage() {
             />
             <div className="home-top-icons">
               <a
+                className="report-issue-link"
+                href="https://github.com/CraftsMan-Labs/SimpleAgents/issues"
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Report an issue on GitHub"
+                title="Report Issue"
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M1.75 1.5h8.5c.97 0 1.75.78 1.75 1.75v8.5c0 .97-.78 1.75-1.75 1.75h-8.5A1.75 1.75 0 0 1 0 11.75v-8.5C0 2.28.78 1.5 1.75 1.5Zm0 1A.75.75 0 0 0 1 3.25v8.5c0 .41.34.75.75.75h8.5a.75.75 0 0 0 .75-.75v-8.5a.75.75 0 0 0-.75-.75h-8.5ZM14.5 0A1.5 1.5 0 0 1 16 1.5v9.25a.75.75 0 0 1-1.5 0V1.5h-9a.75.75 0 0 1 0-1.5h9Z" />
+                  <path d="M6 4.25a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0V5A.75.75 0 0 1 6 4.25Zm0 6a.88.88 0 1 1 0 1.76.88.88 0 0 1 0-1.76Z" />
+                </svg>
+                <span>Report Issue</span>
+              </a>
+              <a
                 className="icon-link"
                 href="https://www.linkedin.com/in/rishub-c-r/"
                 target="_blank"
