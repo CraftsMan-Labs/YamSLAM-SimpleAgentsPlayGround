@@ -212,14 +212,36 @@ steps:
   },
   "Email Chat Draft (graph sample)": {
     sampleFile: "email-chat-draft-or-clarify.yaml",
-    code: `function identity(input) {
-  return input;
+    code: `function GetRagData(payload) {
+  const topic = payload && typeof payload.topic === "string" ? payload.topic : "general";
+  const messages = {
+    already_terminated: "This interview session is already terminated.",
+    terminated: "Candidate terminated based on interview policy.",
+    ask_for_context: "Need more scenario context before proceeding."
+  };
+  return {
+    topic,
+    message: messages[topic] || "Worker completed.",
+    source: "custom-js"
+  };
 }`
   },
   "Python Interview (graph sample)": {
     sampleFile: "python-intern-fun-interview-system.yaml",
-    code: `function identity(input) {
-  return input;
+    code: `function GetRagData(payload) {
+  const topic = payload && typeof payload.topic === "string" ? payload.topic : "general";
+  if (topic === "already_terminated" || topic === "terminated") {
+    return {
+      decision: "terminated",
+      message: "Interview has been terminated according to policy.",
+      topic
+    };
+  }
+  return {
+    decision: "continue",
+    message: "No termination signal from worker.",
+    topic
+  };
 }`
   },
   "Quick hello (steps sample file)": {
@@ -539,10 +561,44 @@ function formatGraphChatOutput(value: unknown): string {
   return safeString(value);
 }
 
+function sanitizeCustomCode(source: string): string {
+  if (/\bimport\b|\brequire\b/.test(source)) {
+    throw new Error("Imports are not allowed in custom JS/TS functions.");
+  }
+
+  const withoutTypes = source
+    .replace(/\btype\s+[\s\S]*?;/g, "")
+    .replace(/\binterface\s+[\s\S]*?\}/g, "")
+    .replace(/:\s*[A-Za-z_][A-Za-z0-9_<>,\[\]\s|]*/g, "");
+
+  return withoutTypes.replace(/\bexport\s+/g, "");
+}
+
+function executeCustomWorkerHandler(input: {
+  code: string;
+  handler: string;
+  payload: unknown;
+  context: Record<string, unknown>;
+}): unknown {
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(input.handler)) {
+    throw new Error(`Invalid custom worker handler name '${input.handler}'.`);
+  }
+
+  const runnableCode = sanitizeCustomCode(input.code);
+  const fn = new Function(
+    "payload",
+    "context",
+    `${runnableCode}\nif (typeof ${input.handler} !== "function") { throw new Error("Custom worker function '${input.handler}' was not found."); }\nreturn ${input.handler}(payload, context);`
+  ) as (payload: unknown, context: Record<string, unknown>) => unknown;
+
+  return fn(input.payload, input.context);
+}
+
 async function executeGraphWorkflowForChat(
   workflow: GraphWorkflowDoc,
   inputMessages: ChatMessage[],
   config: ProviderConfig,
+  customCode: string,
   hooks?: {
     onLog?: (line: string) => void;
     onActiveStep?: (stepId: string | null) => void;
@@ -646,15 +702,18 @@ async function executeGraphWorkflowForChat(
 
     if ("custom_worker" in node.node_type) {
       const customNode = node as GraphCustomWorkerNode;
-      const topic = customNode.config?.payload?.topic ?? "custom_worker";
-      const message =
-        topic === "terminated" || topic === "already_terminated"
-          ? "Interview already terminated based on prior policy decision."
-          : `Custom worker executed for topic: ${topic}`;
+      const handler = customNode.node_type.custom_worker.handler ?? "GetRagData";
+      const payload = customNode.config?.payload ?? { topic: "custom_worker" };
+      const workerOutput = executeCustomWorkerHandler({
+        code: customCode,
+        handler,
+        payload,
+        context
+      });
       const nodesBucket = context.nodes as Record<string, unknown>;
-      nodesBucket[node.id] = { output: { message } };
-      finalOutput = { message };
-      hooks?.onLog?.(`Custom worker output: ${message}`);
+      nodesBucket[node.id] = { output: workerOutput };
+      finalOutput = workerOutput;
+      hooks?.onLog?.(`Custom worker output (${handler}) ready.`);
 
       const nextList = edgeMap.get(node.id) ?? [];
       pointer = nextList[0] ?? "";
@@ -917,7 +976,7 @@ export default function PlaygroundPage() {
       let answer: string;
       if (parsedGraphFlow !== null) {
         setLogs((prev) => [...prev, `Workflow mode: graph (${parsedGraphFlow.entry_node})`]);
-        answer = await executeGraphWorkflowForChat(parsedGraphFlow, historyForWorkflow, config, {
+        answer = await executeGraphWorkflowForChat(parsedGraphFlow, historyForWorkflow, config, codeInput, {
           onLog: (line) => setLogs((prev) => [...prev, line]),
           onActiveStep: (stepId) => setActiveStepId(stepId),
           onStepStream: (stepId, content) => {
