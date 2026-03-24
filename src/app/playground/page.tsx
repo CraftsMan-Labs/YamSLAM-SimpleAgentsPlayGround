@@ -637,6 +637,8 @@ async function executeGraphWorkflowForChat(
     if ("llm_call" in node.node_type) {
       const llmNode = node as GraphLlmNode;
       const llm = llmNode.node_type.llm_call;
+      const configuredModel = config.model.trim();
+      const selectedModel = configuredModel.length > 0 ? configuredModel : llm.model;
       const prompt = interpolateGraphPrompt(llmNode.config?.prompt ?? "", context);
       let promptOrMessages: string | WasmMessage[] = prompt;
 
@@ -667,7 +669,7 @@ async function executeGraphWorkflowForChat(
       }
 
       const content = await callProviderStream(config, promptOrMessages, {
-        model: llm.model,
+        model: selectedModel,
         onDelta: (_chunk, aggregate) => {
           hooks?.onStepStream?.(node.id, aggregate);
         }
