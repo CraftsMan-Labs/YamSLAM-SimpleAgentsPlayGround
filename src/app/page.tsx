@@ -4,16 +4,12 @@ import craftsmanLogoWhite from "./assets/CraftsmanLabs-white.svg";
 
 type RepoStats = {
   stars: number;
-  forks: number;
-  language: string;
   license: string;
 };
 
 async function getSimpleAgentsRepoStats(): Promise<RepoStats> {
   const fallback: RepoStats = {
     stars: 7,
-    forks: 2,
-    language: "Rust",
     license: "Apache-2.0"
   };
 
@@ -33,15 +29,11 @@ async function getSimpleAgentsRepoStats(): Promise<RepoStats> {
 
     const payload = (await response.json()) as {
       stargazers_count?: number;
-      forks_count?: number;
-      language?: string;
       license?: { spdx_id?: string; name?: string };
     };
 
     return {
       stars: typeof payload.stargazers_count === "number" ? payload.stargazers_count : fallback.stars,
-      forks: typeof payload.forks_count === "number" ? payload.forks_count : fallback.forks,
-      language: payload.language ?? fallback.language,
       license: payload.license?.spdx_id ?? payload.license?.name ?? fallback.license
     };
   } catch {
@@ -104,20 +96,6 @@ export default async function HomePage() {
               <div>
                 <div className="label">Stars</div>
                 <div className="repo-stat-value">{repoStats.stars}</div>
-              </div>
-            </article>
-            <article className="repo-stat">
-              <div className="repo-stat-icon">Y</div>
-              <div>
-                <div className="label">Forks</div>
-                <div className="repo-stat-value">{repoStats.forks}</div>
-              </div>
-            </article>
-            <article className="repo-stat">
-              <div className="repo-stat-icon">R</div>
-              <div>
-                <div className="label">Primary Lang</div>
-                <div className="repo-stat-value">{repoStats.language}</div>
               </div>
             </article>
             <article className="repo-stat">
