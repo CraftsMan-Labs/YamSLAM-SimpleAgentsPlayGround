@@ -1231,7 +1231,7 @@ export default function PlaygroundPage() {
         <div className="header-links">
           <a
             className="report-issue-link"
-            href="https://github.com/CraftsMan-Labs/SimpleAgents/issues"
+            href="https://github.com/CraftsMan-Labs/YamSLAM-SimpleAgentsPlayGround/issues"
             target="_blank"
             rel="noreferrer"
             aria-label="Report an issue on GitHub"
