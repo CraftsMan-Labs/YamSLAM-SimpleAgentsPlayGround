@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 const ALLOWED_EXAMPLES = new Set([
+  "email-hierarchical-classification-with-finance-enrichment.yaml",
   "email-chat-draft-or-clarify.yaml",
   "python-intern-fun-interview-system.yaml",
   "quick-hello-steps.yaml"

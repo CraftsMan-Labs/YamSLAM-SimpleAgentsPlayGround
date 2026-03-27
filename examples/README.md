@@ -3,6 +3,7 @@
 These files are copied/adapted from the SimpleAgents examples so they can be used directly in YamSLAM.
 
 - `email-chat-draft-or-clarify.yaml`
+- `email-hierarchical-classification-with-finance-enrichment.yaml`
 - `python-intern-fun-interview-system.yaml`
 - `quick-hello-steps.yaml`
 

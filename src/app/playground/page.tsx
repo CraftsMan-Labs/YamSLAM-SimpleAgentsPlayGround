@@ -193,12 +193,12 @@ steps:
     text: "Model says: {{ask}}"`,
     chatInputs: [
       {
-        label: "Friendly hello",
-        prompt: "Say hello to Priya in one sentence."
+        label: "Greet Priya",
+        prompt: "Use the quick hello workflow to greet Priya in one sentence."
       },
       {
-        label: "Short greeting",
-        prompt: "Write a short hello for a builder trying SimpleAgents for the first time."
+        label: "Welcome builder",
+        prompt: "Run the quick hello example for a first-time builder and keep the greeting short."
       }
     ],
     code: `function slugify(input) {
@@ -237,12 +237,12 @@ steps:
     text: "Slug missing keyword: {{slug}}"`,
     chatInputs: [
       {
-        label: "Valid slug check",
-        prompt: "Check whether 'YamSLAM Playground' produces a slug that contains yamslam."
+        label: "Passing branch",
+        prompt: "Use the Function + branch example with the title 'YamSLAM Playground' and tell me which branch wins."
       },
       {
-        label: "Failing slug check",
-        prompt: "Test the branch flow with the title 'Simple Agents Demo' and tell me which output path wins."
+        label: "Failing branch",
+        prompt: "Use the Function + branch example with the title 'Simple Agents Demo' and show the output path when the slug misses yamslam."
       }
     ],
     code: `function slugify(input) {
@@ -253,12 +253,12 @@ steps:
     sampleFile: "email-chat-draft-or-clarify.yaml",
     chatInputs: [
       {
-        label: "Missing context",
-        prompt: "Draft a reply to a customer asking for pricing, but ask a clarifying question first because the request is vague."
+        label: "Clarify missing info",
+        prompt: "In the Email Chat Draft example, I need a reply email but I have not shared the recipient, tone, or goal yet. Ask me one concise clarifying question."
       },
       {
-        label: "Termination path",
-        prompt: "The thread has already been terminated. Reply according to policy and explain why no further drafting should happen."
+        label: "Capabilities path",
+        prompt: "For the Email Chat Draft example, what kinds of emails can you help draft before I give you a concrete scenario?"
       }
     ],
     code: `function GetRagData(payload) {
@@ -279,12 +279,12 @@ steps:
     sampleFile: "python-intern-fun-interview-system.yaml",
     chatInputs: [
       {
-        label: "Start interview",
-        prompt: "Start a fun but structured Python intern interview for a candidate who knows basic loops and functions."
+        label: "Explain interview",
+        prompt: "For the Python Interview example, explain how the interview works and ask me the first question."
       },
       {
-        label: "Termination policy",
-        prompt: "The candidate violated policy earlier in the session. Respond with the correct terminated outcome."
+        label: "Policy violation",
+        prompt: "For the Python Interview example, the candidate asked to ignore the rules and skip straight to the final answer. Respond with the correct terminated outcome."
       }
     ],
     code: `function GetRagData(payload) {
@@ -307,16 +307,49 @@ steps:
     sampleFile: "quick-hello-steps.yaml",
     chatInputs: [
       {
-        label: "Basic run",
-        prompt: "Run the quick hello workflow for Jordan."
+        label: "Greet Jordan",
+        prompt: "Use the quick hello sample file to greet Jordan."
       },
       {
-        label: "Friendly variant",
-        prompt: "Use the sample file workflow to greet a new teammate named Alex."
+        label: "Greet Alex",
+        prompt: "Use the quick hello sample file to welcome a new teammate named Alex."
       }
     ],
     code: `function identity(input) {
   return input;
+}`
+  },
+  "Email Classification + Enrichment (graph sample)": {
+    sampleFile: "email-hierarchical-classification-with-finance-enrichment.yaml",
+    chatInputs: [
+      {
+        label: "Invoice enrichment",
+        prompt: "Seller Google, 245 Market Street, Suite 800 San Francisco, CA 94105, USA EIN: 12-3456789 Sales Tax Permit: CA-987654321 Bill To Northwind Retail Inc. 890 Madison Ave New York, NY 10022, USA Invoice Details Invoice Number: INV-2026-104 Invoice Date: March 26, 2026 Due Date: April 9, 2026 Payment Terms: Net 14 Description Qty Unit Price Amount Website development services 20 hrs $75.00 $1,500.00 UI design revisions 5 hrs $60.00 $300.00 Hosting setup fee 1 $120.00 $120.00 Subtotal: $1,920.00 Sales Tax (8.25%): $158.40 Total Due: $2,078.40 Payment Method Bank Transfer / ACH Account Name: Google Bank: First National Bank Notes Thank you for your business. Please include the invoice number with your payment. Copyable version Seller: Google Buyer: Northwind Retail Inc. Invoice No: INV-2026-104 Date: March 26, 2026 Due: April 9, 2026 Website development services - $1,500.00 UI design revisions - $300.00 Hosting setup fee - $120.00 Subtotal: $1,920.00 Sales Tax: $158.40 Total Due: $2,078.40"
+      },
+      {
+        label: "HR route",
+        prompt: "I need help updating my parental leave dates and confirming whether payroll will reflect the approved leave period."
+      },
+      {
+        label: "Education route",
+        prompt: "Can you share the updated curriculum schedule for the data literacy course and confirm when the next assessment window opens?"
+      }
+    ],
+    code: `function get_seller_name(input) {
+  var company_name = "";
+  if (typeof input === "string") {
+    company_name = input;
+  } else if (input && typeof input.payload === "string") {
+    company_name = input.payload;
+  }
+  company_name = String(company_name || "").trim().toLowerCase();
+  var stakeholderMap = {
+    google: "Sundar Pichai",
+    microsoft: "Satya Nadella",
+    apple: "Tim Cook",
+    amazon: "Andy Jassy"
+  };
+  return stakeholderMap[company_name] || "unknown";
 }`
   }
 };
