@@ -2,11 +2,20 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Client as WasmClient } from "simple-agents-wasm";
 import { parse } from "yaml";
 import craftsmanLogo from "../assets/CraftsmanLabs.svg";
 import craftsmanLogoWhite from "../assets/CraftsmanLabs-white.svg";
+import {
+  PLAYGROUND_DRAFT_STORAGE_KEY,
+  createDraftFromExample,
+  createDraftStore,
+  readDraftStore,
+  type PlaygroundDraftStore,
+  type PlaygroundDraftWorkspace
+} from "./playground-drafts";
+import { buildPlaygroundExport, type ExportLanguage } from "./playground-export";
 
 type ProviderConfig = {
   baseUrl: string;
@@ -155,6 +164,10 @@ type ExampleConfig = {
 
 const PROVIDER_CONFIG_CACHE_KEY = "yamslam.provider.config.v1";
 const THEME_MODE_CACHE_KEY = "yamslam.theme.mode.v1";
+const YAML_WORKFLOW_DOCS_URL = "https://docs.simpleagents.craftsmanlabs.net/YAML_WORKFLOW_SYSTEM";
+const SKILLS_INSTALL_COMMAND = "npx skills add CraftsMan-Labs/SimpleAgents";
+const DEFAULT_EXAMPLE_NAME = "Quick hello";
+const DRAFT_SAVE_DEBOUNCE_MS = 180;
 
 const EXAMPLES: Record<string, ExampleConfig> = {
   "Quick hello": {
@@ -252,7 +265,55 @@ steps:
   }
 };
 
-const DEFAULT_YAML = EXAMPLES["Quick hello"].yaml ?? "";
+const DEFAULT_YAML = EXAMPLES[DEFAULT_EXAMPLE_NAME].yaml ?? "";
+
+function buildInitialDraftStore(): PlaygroundDraftStore {
+  return createDraftStore({
+    id: DEFAULT_EXAMPLE_NAME,
+    title: DEFAULT_EXAMPLE_NAME,
+    yaml: DEFAULT_YAML,
+    code: EXAMPLES[DEFAULT_EXAMPLE_NAME].code
+  });
+}
+
+function getActiveDraftWorkspace(store: PlaygroundDraftStore): PlaygroundDraftWorkspace {
+  return store.workspaces[store.lastWorkspaceId] ?? store.workspaces[DEFAULT_EXAMPLE_NAME];
+}
+
+async function loadExampleYaml(example: ExampleConfig): Promise<string> {
+  if (example.sampleFile === undefined) {
+    return example.yaml ?? "";
+  }
+
+  const response = await fetch(`/api/examples?name=${encodeURIComponent(example.sampleFile)}`);
+  if (!response.ok) {
+    throw new Error(`Could not load example file (${response.status}).`);
+  }
+
+  const payload = (await response.json()) as { yaml?: string };
+  if (typeof payload.yaml !== "string") {
+    throw new Error("Example API returned invalid payload.");
+  }
+
+  return payload.yaml;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "absolute";
+  textArea.style.left = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textArea);
+}
 
 function safeString(value: unknown): string {
   if (typeof value === "string") {
@@ -768,9 +829,11 @@ function buildYamlAwareChatPrompt(input: {
 }
 
 export default function PlaygroundPage() {
-  const [yamlInput, setYamlInput] = useState(DEFAULT_YAML);
-  const [codeInput, setCodeInput] = useState(EXAMPLES["Quick hello"].code);
-  const [selectedExample, setSelectedExample] = useState("Quick hello");
+  const [draftStore, setDraftStore] = useState<PlaygroundDraftStore>(() => buildInitialDraftStore());
+  const [isDraftHydrated, setIsDraftHydrated] = useState(false);
+  const [lastDraftSavedAt, setLastDraftSavedAt] = useState<number | null>(null);
+  const [copyLanguage, setCopyLanguage] = useState<ExportLanguage>("js");
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [runState, setRunState] = useState<RunState>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   const [stepStreams, setStepStreams] = useState<Record<string, string>>({});
@@ -789,6 +852,45 @@ export default function PlaygroundPage() {
     apiKey: "",
     model: "gpt-4o-mini"
   });
+  const draftSaveTimerRef = useRef<number | null>(null);
+
+  const activeDraft = useMemo(() => getActiveDraftWorkspace(draftStore), [draftStore]);
+  const selectedExample = activeDraft.id;
+  const yamlInput = activeDraft.yaml;
+  const codeInput = activeDraft.code;
+  const draftSaveState =
+    !isDraftHydrated || lastDraftSavedAt === null
+      ? "Saving locally..."
+      : activeDraft.updatedAt > lastDraftSavedAt
+        ? "Saving locally..."
+        : `Saved locally at ${new Date(lastDraftSavedAt).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit"
+          })}`;
+
+  const updateActiveDraft = (patch: Partial<Pick<PlaygroundDraftWorkspace, "yaml" | "code">>) => {
+    setDraftStore((prev) => {
+      const current = getActiveDraftWorkspace(prev);
+      const nextYaml = patch.yaml ?? current.yaml;
+      const nextCode = patch.code ?? current.code;
+      if (nextYaml === current.yaml && nextCode === current.code) {
+        return prev;
+      }
+      const nextWorkspace: PlaygroundDraftWorkspace = {
+        ...current,
+        yaml: nextYaml,
+        code: nextCode,
+        updatedAt: Date.now()
+      };
+      return {
+        ...prev,
+        workspaces: {
+          ...prev.workspaces,
+          [current.id]: nextWorkspace
+        }
+      };
+    });
+  };
 
   useEffect(() => {
     try {
@@ -840,6 +942,55 @@ export default function PlaygroundPage() {
       // Ignore storage write errors.
     }
   }, [config]);
+
+  useEffect(() => {
+    try {
+      const cached = readDraftStore(window.localStorage.getItem(PLAYGROUND_DRAFT_STORAGE_KEY));
+      if (cached !== null) {
+        setDraftStore(cached);
+        const activeWorkspace = getActiveDraftWorkspace(cached);
+        setLastDraftSavedAt(activeWorkspace.updatedAt);
+      }
+    } catch {
+      // Ignore storage read errors.
+    } finally {
+      setIsDraftHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isDraftHydrated) {
+      return;
+    }
+
+    if (draftSaveTimerRef.current !== null) {
+      window.clearTimeout(draftSaveTimerRef.current);
+    }
+
+    draftSaveTimerRef.current = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(PLAYGROUND_DRAFT_STORAGE_KEY, JSON.stringify(draftStore));
+        setLastDraftSavedAt(Date.now());
+      } catch {
+        // Ignore storage write errors.
+      }
+    }, DRAFT_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (draftSaveTimerRef.current !== null) {
+        window.clearTimeout(draftSaveTimerRef.current);
+      }
+    };
+  }, [draftStore, isDraftHydrated]);
+
+  useEffect(() => {
+    if (copyFeedback === null) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setCopyFeedback(null), 2400);
+    return () => window.clearTimeout(timeout);
+  }, [copyFeedback]);
 
   const parsedFlow = useMemo(() => {
     try {
@@ -911,30 +1062,73 @@ export default function PlaygroundPage() {
 
   const applyExample = async (name: string) => {
     const example = EXAMPLES[name];
-    setSelectedExample(name);
-    setCodeInput(example.code);
+    const cachedDraft = draftStore.workspaces[name];
 
-    if (example.sampleFile !== undefined) {
-      try {
-        const response = await fetch(`/api/examples?name=${encodeURIComponent(example.sampleFile)}`);
-        if (!response.ok) {
-          throw new Error(`Could not load example file (${response.status}).`);
-        }
-        const payload = (await response.json()) as { yaml?: string };
-        if (typeof payload.yaml !== "string") {
-          throw new Error("Example API returned invalid payload.");
-        }
-        setYamlInput(payload.yaml);
-        setLogs([`Loaded example: ${name} (${example.sampleFile})`]);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to load sample file.";
-        setLogs([`Failed to load example: ${name}`, message]);
-      }
+    if (cachedDraft !== undefined) {
+      setDraftStore((prev) => ({ ...prev, lastWorkspaceId: name }));
+      setLogs([`Loaded draft: ${name}`]);
       return;
     }
 
-    setYamlInput(example.yaml ?? "");
-    setLogs([`Loaded example: ${name}`]);
+    try {
+      const yaml = await loadExampleYaml(example);
+      const nextWorkspace = createDraftFromExample(name, example, yaml);
+      setDraftStore((prev) => ({
+        ...prev,
+        lastWorkspaceId: name,
+        workspaces: {
+          ...prev.workspaces,
+          [name]: nextWorkspace
+        }
+      }));
+      setLogs([`Loaded example: ${name}${example.sampleFile ? ` (${example.sampleFile})` : ""}`]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load sample file.";
+      setLogs([`Failed to load example: ${name}`, message]);
+    }
+  };
+
+  const resetCurrentExample = async () => {
+    const example = EXAMPLES[selectedExample];
+
+    try {
+      const yaml = await loadExampleYaml(example);
+      const nextWorkspace = createDraftFromExample(selectedExample, example, yaml);
+      setDraftStore((prev) => ({
+        ...prev,
+        workspaces: {
+          ...prev.workspaces,
+          [selectedExample]: nextWorkspace
+        }
+      }));
+      setLogs([`Reset draft to example defaults: ${selectedExample}`]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to reset current example.";
+      setLogs([`Failed to reset example: ${selectedExample}`, message]);
+    }
+  };
+
+  const copyYaml = async () => {
+    try {
+      await copyTextToClipboard(yamlInput);
+      setCopyFeedback("YAML copied.");
+    } catch {
+      setCopyFeedback("Could not copy YAML.");
+    }
+  };
+
+  const copyExportCode = async () => {
+    try {
+      const bundle = buildPlaygroundExport({
+        yaml: yamlInput,
+        code: codeInput,
+        language: copyLanguage
+      });
+      await copyTextToClipboard(bundle.content);
+      setCopyFeedback(`Copied ${bundle.filename}${bundle.note ? ` - ${bundle.note}` : ""}`);
+    } catch {
+      setCopyFeedback("Could not copy export code.");
+    }
   };
 
   const sendChat = async () => {
@@ -1122,43 +1316,89 @@ export default function PlaygroundPage() {
               <label className="label" htmlFor="examples-select">
                 Examples
               </label>
-              <select
-                id="examples-select"
-                value={selectedExample}
-                onChange={(event) => {
-                  void applyExample(event.target.value);
-                }}
-              >
-                {Object.keys(EXAMPLES).map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+              <div className="editor-toolbar-row">
+                <select
+                  id="examples-select"
+                  value={selectedExample}
+                  onChange={(event) => {
+                    void applyExample(event.target.value);
+                  }}
+                >
+                  {Object.keys(EXAMPLES).map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn-secondary" type="button" onClick={() => void resetCurrentExample()}>
+                  Reset
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="editor-stack">
             <div className="field">
-              <label htmlFor="yaml-editor" className="label">
-                Flow YAML
-              </label>
+              <div className="editor-card-header">
+                <div>
+                  <label htmlFor="yaml-editor" className="label">
+                    YAML Workflow Editor
+                  </label>
+                  <p className="editor-help-text">{draftSaveState}</p>
+                </div>
+                <div className="editor-toolbar-row">
+                  <button className="btn-secondary" type="button" onClick={() => void copyYaml()}>
+                    Copy YAML
+                  </button>
+                  <select
+                    aria-label="Select export language"
+                    value={copyLanguage}
+                    onChange={(event) => setCopyLanguage(event.target.value as ExportLanguage)}
+                  >
+                    <option value="js">JS/TS</option>
+                    <option value="python">Python</option>
+                    <option value="go">Go</option>
+                  </select>
+                  <button className="btn-secondary" type="button" onClick={() => void copyExportCode()}>
+                    Copy Code
+                  </button>
+                </div>
+              </div>
+              <p className="editor-help-text">
+                Build or edit a SimpleAgents YAML workflow here. Learn the format in the{" "}
+                <a href={YAML_WORKFLOW_DOCS_URL} target="_blank" rel="noreferrer">
+                  YAML workflow docs
+                </a>
+                .
+              </p>
+              <p className="editor-help-text">
+                Need help drafting YAML fast? Run <code>{SKILLS_INSTALL_COMMAND}</code> and use the
+                SimpleAgents skill.
+              </p>
               <textarea
                 id="yaml-editor"
                 className="yaml-editor"
                 value={yamlInput}
-                onChange={(event) => setYamlInput(event.target.value)}
+                onChange={(event) => updateActiveDraft({ yaml: event.target.value })}
               />
+              {copyFeedback ? <p className="editor-help-text">{copyFeedback}</p> : null}
             </div>
 
             <div className="field">
-              <label htmlFor="code-editor" className="label">
-                Custom JS/TS Functions (no imports)
-              </label>
+              <div className="editor-card-header">
+                <label htmlFor="code-editor" className="label">
+                  Custom JS/TS Functions
+                </label>
+                <span className="editor-help-text">Used by call_function and custom_worker nodes.</span>
+              </div>
+              <p className="editor-help-text">
+                Keep helpers deterministic and import-free so the playground and exported snippets can
+                preserve them cleanly.
+              </p>
               <textarea
                 id="code-editor"
                 value={codeInput}
-                onChange={(event) => setCodeInput(event.target.value)}
+                onChange={(event) => updateActiveDraft({ code: event.target.value })}
               />
             </div>
 
