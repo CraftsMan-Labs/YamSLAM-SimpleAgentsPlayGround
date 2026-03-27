@@ -522,6 +522,32 @@ select:focus-visible {
   gap: 6px;
 }
 
+.editor-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+
+.editor-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.editor-help-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.editor-help-text code {
+  font-size: 12px;
+}
+
 textarea,
 input,
 select {
