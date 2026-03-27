@@ -1197,7 +1197,7 @@ export default function PlaygroundPage() {
     setChatInput("");
   };
 
-  const useChatExample = (prompt: string) => {
+  const applyChatExample = (prompt: string) => {
     setChatInput(prompt);
     setChatOpen(true);
   };
@@ -1523,7 +1523,7 @@ export default function PlaygroundPage() {
                       <button
                         className="btn-secondary chat-example-button"
                         type="button"
-                        onClick={() => useChatExample(item.prompt)}
+                        onClick={() => applyChatExample(item.prompt)}
                       >
                         Use in chat
                       </button>
