@@ -1351,31 +1351,36 @@ export default function PlaygroundPage() {
                   <p className="editor-help-text">Edit YAML, keep drafts locally, and export a starter snippet.</p>
                 </div>
               </div>
-              <p className="editor-help-text">
-                Build or edit a SimpleAgents YAML workflow here. Learn the format in the{" "}
-                <a href={YAML_WORKFLOW_DOCS_URL} target="_blank" rel="noreferrer">
-                  YAML workflow docs
-                </a>
-                .
-              </p>
-              <p className="editor-help-text">
-                Need help drafting YAML fast? Run <code>{SKILLS_INSTALL_COMMAND}</code> and use the
-                SimpleAgents skill.
-              </p>
+              <div className="editor-help-stack">
+                <p className="editor-help-text">
+                  Build or edit a SimpleAgents YAML workflow here. Learn the format in the{" "}
+                  <a href={YAML_WORKFLOW_DOCS_URL} target="_blank" rel="noreferrer">
+                    YAML workflow docs
+                  </a>
+                  .
+                </p>
+                <p className="editor-help-text">
+                  Need help drafting YAML fast? Run <code>{SKILLS_INSTALL_COMMAND}</code> and use the
+                  SimpleAgents skill.
+                </p>
+              </div>
               <div className="editor-command-bar">
                 <div className="editor-status-stack">
                   <span className="editor-status-badge">{draftSaveState}</span>
                   {copyFeedback ? <span className="editor-feedback-text">{copyFeedback}</span> : null}
                 </div>
                 <div className="editor-command-actions">
-                  <button className="btn-secondary" type="button" onClick={() => void copyYaml()}>
-                    Copy YAML
-                  </button>
                   <div className="export-control">
+                    <span className="editor-control-label">Current YAML</span>
+                    <button className="btn-secondary editor-action-button" type="button" onClick={() => void copyYaml()}>
+                      Copy YAML
+                    </button>
+                  </div>
+                  <div className="export-control export-control-wide">
                     <span className="editor-control-label">Export starter code</span>
                     <div className="editor-toolbar-row export-control-row">
                       <select
-                        className="editor-inline-select export-language-select"
+                        className="editor-inline-select export-language-select editor-action-input"
                         aria-label="Select export language"
                         value={copyLanguage}
                         onChange={(event) => setCopyLanguage(event.target.value as ExportLanguage)}
@@ -1384,7 +1389,7 @@ export default function PlaygroundPage() {
                         <option value="python">Python</option>
                         <option value="go">Go</option>
                       </select>
-                      <button className="btn-primary" type="button" onClick={() => void copyExportCode()}>
+                      <button className="btn-primary editor-action-button" type="button" onClick={() => void copyExportCode()}>
                         Copy Code
                       </button>
                     </div>

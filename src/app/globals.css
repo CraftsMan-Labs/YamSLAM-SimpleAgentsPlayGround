@@ -542,6 +542,12 @@ select:focus-visible {
   flex: 1 1 240px;
 }
 
+.editor-help-stack {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
 .editor-toolbar-row {
   display: flex;
   align-items: center;
@@ -559,11 +565,10 @@ select:focus-visible {
 }
 
 .editor-command-bar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 16px;
   padding: 12px 14px;
   border: 1px solid var(--dark-ink);
   border-radius: 14px;
@@ -571,11 +576,11 @@ select:focus-visible {
 }
 
 .editor-command-actions {
-  display: flex;
-  align-items: stretch;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(160px, auto) minmax(260px, auto);
+  align-items: end;
+  justify-content: end;
+  gap: 12px;
 }
 
 .editor-status-stack {
@@ -611,6 +616,10 @@ select:focus-visible {
   min-width: 0;
 }
 
+.export-control-wide {
+  min-width: 260px;
+}
+
 .editor-control-label {
   font-size: 11px;
   font-weight: 700;
@@ -621,6 +630,7 @@ select:focus-visible {
 
 .export-control-row {
   flex-wrap: nowrap;
+  align-items: stretch;
 }
 
 .editor-inline-select {
@@ -638,12 +648,17 @@ select:focus-visible {
   min-width: 110px;
 }
 
+.editor-action-button,
+.editor-action-input {
+  min-height: 50px;
+}
+
 .editor-help-text {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-muted);
-  max-width: 72ch;
+  max-width: none;
 }
 
 .editor-help-text code {
@@ -945,8 +960,13 @@ textarea {
   }
 
   .editor-command-actions {
+    grid-template-columns: 1fr;
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .export-control-wide {
+    min-width: 0;
   }
 }
 
