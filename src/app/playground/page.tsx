@@ -1312,12 +1312,13 @@ export default function PlaygroundPage() {
       <div className="playground-layout" style={{ position: "relative" }}>
         <section className="pane pane-right">
           <div className="pane-header">
-            <div className="field" style={{ minWidth: 280, margin: 0 }}>
+            <div className="field editor-example-field">
               <label className="label" htmlFor="examples-select">
                 Examples
               </label>
-              <div className="editor-toolbar-row">
+              <div className="editor-toolbar-row example-switcher-row">
                 <select
+                  className="editor-inline-select example-switcher-select"
                   id="examples-select"
                   value={selectedExample}
                   onChange={(event) => {
@@ -1340,17 +1341,18 @@ export default function PlaygroundPage() {
           <div className="editor-stack">
             <div className="field">
               <div className="editor-card-header">
-                <div>
+                <div className="editor-title-block">
                   <label htmlFor="yaml-editor" className="label">
                     YAML Workflow Editor
                   </label>
                   <p className="editor-help-text">{draftSaveState}</p>
                 </div>
-                <div className="editor-toolbar-row">
+                <div className="editor-toolbar-row editor-actions-row">
                   <button className="btn-secondary" type="button" onClick={() => void copyYaml()}>
                     Copy YAML
                   </button>
                   <select
+                    className="editor-inline-select export-language-select"
                     aria-label="Select export language"
                     value={copyLanguage}
                     onChange={(event) => setCopyLanguage(event.target.value as ExportLanguage)}
@@ -1386,10 +1388,14 @@ export default function PlaygroundPage() {
 
             <div className="field">
               <div className="editor-card-header">
-                <label htmlFor="code-editor" className="label">
-                  Custom JS/TS Functions
-                </label>
-                <span className="editor-help-text">Used by call_function and custom_worker nodes.</span>
+                <div className="editor-title-block">
+                  <label htmlFor="code-editor" className="label">
+                    Custom JS/TS Functions
+                  </label>
+                  <span className="editor-help-text">
+                    Used by call_function and custom_worker nodes.
+                  </span>
+                </div>
               </div>
               <p className="editor-help-text">
                 Keep helpers deterministic and import-free so the playground and exported snippets can
