@@ -156,9 +156,15 @@ type ParsedThinkingContent = {
   thinking: string[];
 };
 
+type ExampleChatInput = {
+  label: string;
+  prompt: string;
+};
+
 type ExampleConfig = {
   yaml?: string;
   code: string;
+  chatInputs: ExampleChatInput[];
   sampleFile?: string;
 };
 
@@ -185,6 +191,16 @@ steps:
   - id: final
     type: output
     text: "Model says: {{ask}}"`,
+    chatInputs: [
+      {
+        label: "Friendly hello",
+        prompt: "Say hello to Priya in one sentence."
+      },
+      {
+        label: "Short greeting",
+        prompt: "Write a short hello for a builder trying SimpleAgents for the first time."
+      }
+    ],
     code: `function slugify(input) {
   return String(input).toLowerCase().replace(/\s+/g, "-");
 }`
@@ -219,12 +235,32 @@ steps:
   - id: output_bad
     type: output
     text: "Slug missing keyword: {{slug}}"`,
+    chatInputs: [
+      {
+        label: "Valid slug check",
+        prompt: "Check whether 'YamSLAM Playground' produces a slug that contains yamslam."
+      },
+      {
+        label: "Failing slug check",
+        prompt: "Test the branch flow with the title 'Simple Agents Demo' and tell me which output path wins."
+      }
+    ],
     code: `function slugify(input) {
   return String(input).toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }`
   },
   "Email Chat Draft (graph sample)": {
     sampleFile: "email-chat-draft-or-clarify.yaml",
+    chatInputs: [
+      {
+        label: "Missing context",
+        prompt: "Draft a reply to a customer asking for pricing, but ask a clarifying question first because the request is vague."
+      },
+      {
+        label: "Termination path",
+        prompt: "The thread has already been terminated. Reply according to policy and explain why no further drafting should happen."
+      }
+    ],
     code: `function GetRagData(payload) {
   const topic = payload && typeof payload.topic === "string" ? payload.topic : "general";
   const messages = {
@@ -241,6 +277,16 @@ steps:
   },
   "Python Interview (graph sample)": {
     sampleFile: "python-intern-fun-interview-system.yaml",
+    chatInputs: [
+      {
+        label: "Start interview",
+        prompt: "Start a fun but structured Python intern interview for a candidate who knows basic loops and functions."
+      },
+      {
+        label: "Termination policy",
+        prompt: "The candidate violated policy earlier in the session. Respond with the correct terminated outcome."
+      }
+    ],
     code: `function GetRagData(payload) {
   const topic = payload && typeof payload.topic === "string" ? payload.topic : "general";
   if (topic === "already_terminated" || topic === "terminated") {
@@ -259,6 +305,16 @@ steps:
   },
   "Quick hello (steps sample file)": {
     sampleFile: "quick-hello-steps.yaml",
+    chatInputs: [
+      {
+        label: "Basic run",
+        prompt: "Run the quick hello workflow for Jordan."
+      },
+      {
+        label: "Friendly variant",
+        prompt: "Use the sample file workflow to greet a new teammate named Alex."
+      }
+    ],
     code: `function identity(input) {
   return input;
 }`
@@ -856,8 +912,10 @@ export default function PlaygroundPage() {
 
   const activeDraft = useMemo(() => getActiveDraftWorkspace(draftStore), [draftStore]);
   const selectedExample = activeDraft.id;
+  const activeExample = EXAMPLES[selectedExample] ?? EXAMPLES[DEFAULT_EXAMPLE_NAME];
   const yamlInput = activeDraft.yaml;
   const codeInput = activeDraft.code;
+  const sampleChatInputs = activeExample.chatInputs;
   const draftSaveState =
     !isDraftHydrated || lastDraftSavedAt === null
       ? "Saving locally..."
@@ -1131,6 +1189,25 @@ export default function PlaygroundPage() {
       setCopyFeedback(`Copied ${bundle.filename}${bundle.note ? ` - ${bundle.note}` : ""}`);
     } catch {
       setCopyFeedback("Could not copy export code.");
+    }
+  };
+
+  const clearChatHistory = () => {
+    setChatMessages([]);
+    setChatInput("");
+  };
+
+  const useChatExample = (prompt: string) => {
+    setChatInput(prompt);
+    setChatOpen(true);
+  };
+
+  const copyChatExample = async (prompt: string) => {
+    try {
+      await copyTextToClipboard(prompt);
+      setCopyFeedback("Chat example copied.");
+    } catch {
+      setCopyFeedback("Could not copy chat example.");
     }
   };
 
@@ -1426,6 +1503,43 @@ export default function PlaygroundPage() {
               />
             </div>
 
+            <div className="field">
+              <div className="editor-card-header">
+                <div className="editor-title-block">
+                  <label className="label">Sample Chat Inputs</label>
+                  <span className="editor-help-text">
+                    Reuse these prompts for the selected YAML example in the chat panel.
+                  </span>
+                </div>
+              </div>
+              <div className="chat-example-list">
+                {sampleChatInputs.map((item) => (
+                  <div key={`${selectedExample}-${item.label}`} className="chat-example-card">
+                    <div className="chat-example-copy">
+                      <div className="chat-example-label">{item.label}</div>
+                      <p className="chat-example-prompt mono-value">{item.prompt}</p>
+                    </div>
+                    <div className="chat-example-actions">
+                      <button
+                        className="btn-secondary chat-example-button"
+                        type="button"
+                        onClick={() => useChatExample(item.prompt)}
+                      >
+                        Use in chat
+                      </button>
+                      <button
+                        className="btn-secondary chat-example-button"
+                        type="button"
+                        onClick={() => void copyChatExample(item.prompt)}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <p className="mono-value" style={{ margin: 0 }}>
               Interaction mode: chat-only workflow execution.
             </p>
@@ -1595,16 +1709,25 @@ export default function PlaygroundPage() {
                 </svg>
               </button>
               {chatOpen ? (
-                <button
-                  className="btn-secondary"
-                  style={{ padding: "4px 10px", fontSize: 13 }}
-                  onClick={() => setChatOpen(false)}
-                  type="button"
-                  aria-label="Minimise"
-                  title="Minimise"
-                >
-                  -
-                </button>
+                <div className="chat-header-actions">
+                  <button
+                    className="btn-secondary chat-header-button"
+                    onClick={clearChatHistory}
+                    type="button"
+                    disabled={chatPending || chatMessages.length === 0}
+                  >
+                    Clear chat
+                  </button>
+                  <button
+                    className="btn-secondary chat-header-button"
+                    onClick={() => setChatOpen(false)}
+                    type="button"
+                    aria-label="Minimise"
+                    title="Minimise"
+                  >
+                    -
+                  </button>
+                </div>
               ) : null}
             </div>
             {chatOpen ? (

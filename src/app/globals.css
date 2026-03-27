@@ -511,7 +511,7 @@ select:focus-visible {
 
 .editor-stack {
   display: grid;
-  grid-template-rows: minmax(280px, 1fr) minmax(170px, 0.5fr) auto;
+  grid-template-rows: minmax(280px, 1fr) minmax(170px, 0.5fr) auto auto;
   gap: var(--space-12);
   min-height: 0;
 }
@@ -672,6 +672,52 @@ select:focus-visible {
   color: var(--primary-500);
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.chat-example-list {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-example-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--dark-ink);
+  border-radius: 14px;
+  background: var(--panel-muted);
+}
+
+.chat-example-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-example-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.chat-example-prompt {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.chat-example-actions {
+  display: grid;
+  grid-auto-flow: column;
+  align-items: start;
+  gap: 8px;
+}
+
+.chat-example-button {
+  min-width: 110px;
+  padding: 8px 12px;
 }
 
 textarea,
@@ -836,6 +882,17 @@ textarea {
   border-bottom: 1px solid var(--dark-ink);
 }
 
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-header-button {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
 .chat-header-icon {
   width: 30px;
   height: 30px;
@@ -888,7 +945,7 @@ textarea {
 
 @media (max-width: 1360px) {
   .editor-stack {
-    grid-template-rows: minmax(240px, 1fr) minmax(150px, 0.45fr) auto;
+    grid-template-rows: minmax(240px, 1fr) minmax(150px, 0.45fr) auto auto;
   }
 
   .provider-box {
@@ -919,7 +976,7 @@ textarea {
   }
 
   .editor-stack {
-    grid-template-rows: minmax(220px, 1fr) minmax(130px, auto) auto;
+    grid-template-rows: minmax(220px, 1fr) minmax(130px, auto) auto auto;
   }
 
   .yaml-editor {
@@ -975,6 +1032,15 @@ textarea {
 
   .export-control-wide {
     min-width: 0;
+  }
+
+  .chat-example-card {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-example-actions {
+    grid-auto-flow: row;
+    justify-content: stretch;
   }
 }
 
@@ -1051,7 +1117,7 @@ textarea {
   }
 
   .editor-stack {
-    grid-template-rows: minmax(200px, auto) minmax(120px, auto) auto;
+    grid-template-rows: minmax(200px, auto) minmax(120px, auto) auto auto;
   }
 
   .editor-card-header {
@@ -1099,5 +1165,14 @@ textarea {
 
   .msg {
     font-size: 13px;
+  }
+
+  .chat-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .chat-example-button {
+    width: 100%;
   }
 }
