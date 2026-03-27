@@ -1348,25 +1348,7 @@ export default function PlaygroundPage() {
                   <label htmlFor="yaml-editor" className="label">
                     YAML Workflow Editor
                   </label>
-                  <p className="editor-help-text">{draftSaveState}</p>
-                </div>
-                <div className="editor-toolbar-row editor-actions-row">
-                  <button className="btn-secondary" type="button" onClick={() => void copyYaml()}>
-                    Copy YAML
-                  </button>
-                  <select
-                    className="editor-inline-select export-language-select"
-                    aria-label="Select export language"
-                    value={copyLanguage}
-                    onChange={(event) => setCopyLanguage(event.target.value as ExportLanguage)}
-                  >
-                    <option value="js">JS/TS</option>
-                    <option value="python">Python</option>
-                    <option value="go">Go</option>
-                  </select>
-                  <button className="btn-secondary" type="button" onClick={() => void copyExportCode()}>
-                    Copy Code
-                  </button>
+                  <p className="editor-help-text">Edit YAML, keep drafts locally, and export a starter snippet.</p>
                 </div>
               </div>
               <p className="editor-help-text">
@@ -1380,13 +1362,41 @@ export default function PlaygroundPage() {
                 Need help drafting YAML fast? Run <code>{SKILLS_INSTALL_COMMAND}</code> and use the
                 SimpleAgents skill.
               </p>
+              <div className="editor-command-bar">
+                <div className="editor-status-stack">
+                  <span className="editor-status-badge">{draftSaveState}</span>
+                  {copyFeedback ? <span className="editor-feedback-text">{copyFeedback}</span> : null}
+                </div>
+                <div className="editor-command-actions">
+                  <button className="btn-secondary" type="button" onClick={() => void copyYaml()}>
+                    Copy YAML
+                  </button>
+                  <div className="export-control">
+                    <span className="editor-control-label">Export starter code</span>
+                    <div className="editor-toolbar-row export-control-row">
+                      <select
+                        className="editor-inline-select export-language-select"
+                        aria-label="Select export language"
+                        value={copyLanguage}
+                        onChange={(event) => setCopyLanguage(event.target.value as ExportLanguage)}
+                      >
+                        <option value="js">JS/TS</option>
+                        <option value="python">Python</option>
+                        <option value="go">Go</option>
+                      </select>
+                      <button className="btn-primary" type="button" onClick={() => void copyExportCode()}>
+                        Copy Code
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <textarea
                 id="yaml-editor"
                 className="yaml-editor"
                 value={yamlInput}
                 onChange={(event) => updateActiveDraft({ yaml: event.target.value })}
               />
-              {copyFeedback ? <p className="editor-help-text">{copyFeedback}</p> : null}
             </div>
 
             <div className="field">

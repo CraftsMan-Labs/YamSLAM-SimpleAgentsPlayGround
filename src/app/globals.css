@@ -558,6 +558,71 @@ select:focus-visible {
   flex: 0 1 auto;
 }
 
+.editor-command-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--dark-ink);
+  border-radius: 14px;
+  background: var(--panel-muted);
+}
+
+.editor-command-actions {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.editor-status-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.editor-status-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(240, 128, 80, 0.4);
+  border-radius: 999px;
+  background: rgba(240, 128, 80, 0.12);
+  color: var(--primary-500);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editor-feedback-text {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.export-control {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.editor-control-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.export-control-row {
+  flex-wrap: nowrap;
+}
+
 .editor-inline-select {
   width: auto;
   min-width: 0;
@@ -873,6 +938,16 @@ textarea {
     width: 100%;
     justify-content: flex-start;
   }
+
+  .editor-command-bar,
+  .editor-command-actions {
+    align-items: stretch;
+  }
+
+  .editor-command-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 720px) {
@@ -960,7 +1035,27 @@ textarea {
   }
 
   .editor-toolbar-row > .btn-secondary,
+  .editor-command-actions > .btn-secondary,
   .editor-toolbar-row > .editor-inline-select {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .editor-command-bar {
+    padding: 12px;
+  }
+
+  .export-control {
+    width: 100%;
+  }
+
+  .export-control-row {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .export-control-row > .btn-primary,
+  .export-control-row > .editor-inline-select {
     flex: 1 1 100%;
     width: 100%;
   }
