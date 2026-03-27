@@ -622,6 +622,36 @@ function interpolateGraphPrompt(template: string, context: Record<string, unknow
   });
 }
 
+function interpolateGraphValue(value: unknown, context: Record<string, unknown>): unknown {
+  if (typeof value === "string") {
+    return value.replace(/{{\s*([^}]+)\s*}}/g, (_, token: string) => {
+      const resolved = getValueFromPath(context, token.trim())
+      if (resolved === undefined || resolved === null) {
+        return ""
+      }
+      if (typeof resolved === "string") {
+        return resolved
+      }
+      return JSON.stringify(resolved)
+    })
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => interpolateGraphValue(entry, context))
+  }
+
+  if (value !== null && value !== undefined && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+        key,
+        interpolateGraphValue(nested, context)
+      ])
+    )
+  }
+
+  return value
+}
+
 function parsePossiblyJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -822,7 +852,10 @@ async function executeGraphWorkflowForChat(
     if ("custom_worker" in node.node_type) {
       const customNode = node as GraphCustomWorkerNode;
       const handler = customNode.node_type.custom_worker.handler ?? "GetRagData";
-      const payload = customNode.config?.payload ?? { topic: "custom_worker" };
+      const payload = interpolateGraphValue(
+        customNode.config?.payload ?? { topic: "custom_worker" },
+        context
+      );
       const workerOutput = executeCustomWorkerHandler({
         code: customCode,
         handler,
