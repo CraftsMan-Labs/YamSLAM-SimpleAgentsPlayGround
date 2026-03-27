@@ -8,9 +8,12 @@ export type PlaygroundExportBundle = {
 };
 
 type ExportInput = {
+  apiKey: string;
+  baseUrl: string;
   yaml: string;
   code: string;
   language: ExportLanguage;
+  model: string;
 };
 
 function escapeTemplateLiteral(input: string): string {
@@ -19,6 +22,10 @@ function escapeTemplateLiteral(input: string): string {
 
 function escapePythonTripleQuote(input: string): string {
   return input.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
+}
+
+function escapeDoubleQuotedString(input: string): string {
+  return input.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function detectWorkflowFunctionNames(yaml: string): string[] {
@@ -53,21 +60,24 @@ function buildJavaScriptExport(input: ExportInput): PlaygroundExportBundle {
 
 const workflowYaml = \`${escapeTemplateLiteral(input.yaml)}\`;
 const customCode = \`${escapeTemplateLiteral(input.code)}\`;
+const model = ${JSON.stringify(input.model)};
+const apiKey = ${JSON.stringify(input.apiKey)};
+const baseUrl = ${JSON.stringify(input.baseUrl)};
 
 ${functionMapBlock}
 
 async function main() {
-  const apiKey = process.env.OPENAI_API_KEY || "";
   if (!apiKey) {
-    throw new Error("Set OPENAI_API_KEY before running this example.");
+    throw new Error("The exported snippet expects a non-empty API key.");
   }
 
   const client = new Client("openai", {
     apiKey,
-    baseUrl: process.env.OPENAI_API_BASE || "https://api.openai.com/v1",
+    baseUrl,
     fetchImpl: fetch
   });
 
+  console.log("Running model:", model);
   const result = await client.runWorkflowYamlString(
     workflowYaml,
     {
@@ -111,8 +121,13 @@ WORKFLOW_YAML = """${escapePythonTripleQuote(input.yaml)}"""
 
 CUSTOM_JS_TS_REFERENCE = """${escapePythonTripleQuote(input.code)}"""
 
+API_KEY = "${escapeDoubleQuotedString(input.apiKey)}"
+API_BASE = "${escapeDoubleQuotedString(input.baseUrl)}"
+MODEL = "${escapeDoubleQuotedString(input.model)}"
+
 ${stubBlock}def main() -> None:
-    client = Client("openai", api_key="YOUR_API_KEY", api_base="https://api.openai.com/v1")
+    client = Client("openai", api_key=API_KEY, api_base=API_BASE)
+    print(f"Configured model: {MODEL}")
     print("Paste WORKFLOW_YAML into your workflow runner and port any stubs below before execution.")
     print(WORKFLOW_YAML)
 
@@ -147,10 +162,16 @@ import "fmt"
 const workflowYAML = \`${escapeTemplateLiteral(input.yaml)}\`
 
 const customJSTSReference = \`${escapeTemplateLiteral(input.code)}\`
+const apiKey = ${JSON.stringify(input.apiKey)}
+const baseURL = ${JSON.stringify(input.baseUrl)}
+const model = ${JSON.stringify(input.model)}
 
 ${stubBlock.length > 0 ? `${stubBlock}
 
 ` : ""}func main() {
+\tfmt.Println("Configured API key:", apiKey)
+\tfmt.Println("Configured base URL:", baseURL)
+\tfmt.Println("Configured model:", model)
 \tfmt.Println("Paste workflowYAML into your Go workflow runner and port any stubs below before execution.")
 \tfmt.Println(workflowYAML)
 }

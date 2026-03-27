@@ -1120,9 +1120,12 @@ export default function PlaygroundPage() {
   const copyExportCode = async () => {
     try {
       const bundle = buildPlaygroundExport({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
         yaml: yamlInput,
         code: codeInput,
-        language: copyLanguage
+        language: copyLanguage,
+        model: config.model
       });
       await copyTextToClipboard(bundle.content);
       setCopyFeedback(`Copied ${bundle.filename}${bundle.note ? ` - ${bundle.note}` : ""}`);
