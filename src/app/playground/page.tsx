@@ -985,6 +985,36 @@ function extractFunctionNamesFromCode(
   return [...names];
 }
 
+function detectDisallowedImports(
+  ts: typeof import("typescript"),
+  sourceFile: import("typescript").SourceFile
+): boolean {
+  let hasImport = false;
+
+  const visit = (node: import("typescript").Node) => {
+    if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
+      hasImport = true;
+      return;
+    }
+
+    if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        hasImport = true;
+        return;
+      }
+      if (ts.isIdentifier(node.expression) && node.expression.text === "require") {
+        hasImport = true;
+        return;
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(sourceFile, visit);
+  return hasImport;
+}
+
 function getValueFromPath(source: unknown, path: string): unknown {
   if (source === null || source === undefined || typeof source !== "object") {
     return undefined;
@@ -1577,17 +1607,17 @@ export default function PlaygroundPage() {
 
   useEffect(() => {
     let cancelled = false;
+    setCodeValidation({
+      errors: [],
+      warnings: [],
+      declaredFunctions: [],
+      ready: false
+    });
 
     const validateCode = async () => {
       const errors: ValidationMessage[] = [];
       const warnings: ValidationMessage[] = [];
       let declaredFunctions: string[] = [];
-
-      if (/\bimport\b|\brequire\b/.test(codeInput)) {
-        errors.push(
-          toValidationMessage("code", "error", "Imports are not allowed in custom JS/TS functions.")
-        );
-      }
 
       try {
         const tsModule = await import("typescript");
@@ -1599,6 +1629,11 @@ export default function PlaygroundPage() {
           true,
           ts.ScriptKind.TSX
         );
+        if (detectDisallowedImports(ts, sourceFile)) {
+          errors.push(
+            toValidationMessage("code", "error", "Imports are not allowed in custom JS/TS functions.")
+          );
+        }
         const transpiled = ts.transpileModule(codeInput, {
           compilerOptions: {
             target: ts.ScriptTarget.ES2022,
