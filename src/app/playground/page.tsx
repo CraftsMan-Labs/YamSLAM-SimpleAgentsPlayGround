@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Client as WasmClient } from "simple-agents-wasm";
-import { parse } from "yaml";
+import { LineCounter, parseDocument } from "yaml";
 import craftsmanLogo from "../assets/CraftsmanLabs.svg";
 import craftsmanLogoWhite from "../assets/CraftsmanLabs-white.svg";
 import {
@@ -145,6 +145,28 @@ type MermaidEdge = {
 };
 
 type RunState = "idle" | "running" | "failed" | "done";
+
+type ValidationMessage = {
+  source: "yaml" | "flow" | "graph" | "code";
+  level: "error" | "warning";
+  message: string;
+  line?: number;
+  column?: number;
+};
+
+type ValidationSummary = {
+  parsedFlow: FlowDoc | null;
+  parsedGraphFlow: GraphWorkflowDoc | null;
+  messages: ValidationMessage[];
+  functionRefs: Array<{ name: string; kind: "handler" | "function"; line?: number; column?: number }>;
+};
+
+type CodeValidationSummary = {
+  errors: ValidationMessage[];
+  warnings: ValidationMessage[];
+  declaredFunctions: string[];
+  ready: boolean;
+};
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -448,21 +470,24 @@ function parseThinkingContent(content: string): ParsedThinkingContent {
   };
 }
 
-function parseFlow(input: string): FlowDoc {
-  const parsed = parse(input) as Partial<FlowDoc>;
-  if (!parsed || !Array.isArray(parsed.steps)) {
+function parseFlowFromObject(parsed: unknown): FlowDoc {
+  if (parsed === null || parsed === undefined || typeof parsed !== "object") {
+    throw new Error("YAML must include a top-level 'steps' array.");
+  }
+  const flow = parsed as Partial<FlowDoc>;
+  if (!Array.isArray(flow.steps)) {
     throw new Error("YAML must include a top-level 'steps' array.");
   }
 
-  parsed.steps.forEach((step, index) => {
+  flow.steps.forEach((step, index) => {
     if (!step.id || !step.type) {
       throw new Error(`Step at index ${index} is missing 'id' or 'type'.`);
     }
   });
 
   return {
-    version: parsed.version ?? "1",
-    steps: parsed.steps as FlowStep[]
+    version: flow.version ?? "1",
+    steps: flow.steps as FlowStep[]
   };
 }
 
@@ -613,18 +638,347 @@ async function callProviderStream(
   return aggregate;
 }
 
-function parseGraphFlow(input: string): GraphWorkflowDoc {
-  const parsed = parse(input) as Partial<GraphWorkflowDoc>;
+function parseGraphFlowFromObject(parsed: unknown): GraphWorkflowDoc {
   if (
     parsed === null ||
     parsed === undefined ||
     typeof parsed !== "object" ||
-    typeof parsed.entry_node !== "string" ||
-    !Array.isArray(parsed.nodes)
+    typeof (parsed as Partial<GraphWorkflowDoc>).entry_node !== "string" ||
+    !Array.isArray((parsed as Partial<GraphWorkflowDoc>).nodes)
   ) {
     throw new Error("Not a graph workflow document.");
   }
   return parsed as GraphWorkflowDoc;
+}
+
+function toValidationMessage(
+  source: ValidationMessage["source"],
+  level: ValidationMessage["level"],
+  message: string,
+  line?: number,
+  column?: number
+): ValidationMessage {
+  return {
+    source,
+    level,
+    message,
+    line,
+    column
+  };
+}
+
+function getLinePosition(lineCounter: LineCounter | null, offset: number | null | undefined) {
+  if (!lineCounter || offset === null || offset === undefined) {
+    return null;
+  }
+  try {
+    return lineCounter.linePos(offset);
+  } catch {
+    return null;
+  }
+}
+
+function buildYamlDiagnostics(input: string) {
+  const lineCounter = new LineCounter();
+  const doc = parseDocument(input, { lineCounter });
+  const messages: ValidationMessage[] = [];
+
+  doc.errors.forEach((error) => {
+    const position = getLinePosition(lineCounter, error.pos ?? error.range?.[0]);
+    messages.push(
+      toValidationMessage(
+        "yaml",
+        "error",
+        error.message,
+        position?.line !== undefined ? position.line + 1 : undefined,
+        position?.col !== undefined ? position.col + 1 : undefined
+      )
+    );
+  });
+
+  doc.warnings.forEach((warning) => {
+    const position = getLinePosition(lineCounter, warning.pos ?? warning.range?.[0]);
+    messages.push(
+      toValidationMessage(
+        "yaml",
+        "warning",
+        warning.message,
+        position?.line !== undefined ? position.line + 1 : undefined,
+        position?.col !== undefined ? position.col + 1 : undefined
+      )
+    );
+  });
+
+  return {
+    doc,
+    lineCounter,
+    messages
+  };
+}
+
+function extractFunctionRefs(input: string, lineCounter: LineCounter | null) {
+  const refs: Array<{ name: string; kind: "handler" | "function"; line?: number; column?: number }> = [];
+  const handlerRegex = /handler:\s*([A-Za-z_$][A-Za-z0-9_$]*)/g;
+  const functionRegex = /function:\s*([A-Za-z_$][A-Za-z0-9_$]*)/g;
+
+  for (const match of input.matchAll(handlerRegex)) {
+    const position = getLinePosition(lineCounter, match.index ?? 0);
+    refs.push({
+      name: match[1],
+      kind: "handler",
+      line: position?.line !== undefined ? position.line + 1 : undefined,
+      column: position?.col !== undefined ? position.col + 1 : undefined
+    });
+  }
+
+  for (const match of input.matchAll(functionRegex)) {
+    const position = getLinePosition(lineCounter, match.index ?? 0);
+    refs.push({
+      name: match[1],
+      kind: "function",
+      line: position?.line !== undefined ? position.line + 1 : undefined,
+      column: position?.col !== undefined ? position.col + 1 : undefined
+    });
+  }
+
+  return refs;
+}
+
+function validateFlowSemantics(flow: FlowDoc): ValidationMessage[] {
+  const messages: ValidationMessage[] = [];
+  const ids = new Set<string>();
+  const knownTypes: FlowStep["type"][] = ["set", "llm_call", "if", "output", "call_function"];
+  const idList = flow.steps.map((step) => step.id);
+  const idSet = new Set(idList);
+
+  flow.steps.forEach((step, index) => {
+    if (ids.has(step.id)) {
+      messages.push(
+        toValidationMessage("flow", "error", `Duplicate step id '${step.id}' at index ${index}.`)
+      );
+    } else {
+      ids.add(step.id);
+    }
+
+    if (!knownTypes.includes(step.type)) {
+      messages.push(
+        toValidationMessage("flow", "error", `Step '${step.id}' has unsupported type '${step.type}'.`)
+      );
+    }
+
+    if (step.type === "call_function" && (!step.function || step.function.trim().length === 0)) {
+      messages.push(
+        toValidationMessage("flow", "error", `Step '${step.id}' requires a 'function' name.`)
+      );
+    }
+
+    if (step.type === "if") {
+      if (step.then && !idSet.has(step.then)) {
+        messages.push(
+          toValidationMessage("flow", "error", `Step '${step.id}' references missing 'then' target '${step.then}'.`)
+        );
+      }
+      if (step.else && !idSet.has(step.else)) {
+        messages.push(
+          toValidationMessage("flow", "error", `Step '${step.id}' references missing 'else' target '${step.else}'.`)
+        );
+      }
+    }
+
+    if (step.next && !idSet.has(step.next)) {
+      messages.push(
+        toValidationMessage("flow", "error", `Step '${step.id}' references missing 'next' target '${step.next}'.`)
+      );
+    }
+  });
+
+  return messages;
+}
+
+function validateGraphSemantics(flow: GraphWorkflowDoc): ValidationMessage[] {
+  const messages: ValidationMessage[] = [];
+  const ids = new Set<string>();
+  const idList = flow.nodes.map((node) => node.id);
+  const idSet = new Set(idList);
+  const supportedTypes = new Set(["llm_call", "switch", "custom_worker"]);
+
+  flow.nodes.forEach((node, index) => {
+    if (ids.has(node.id)) {
+      messages.push(
+        toValidationMessage("graph", "error", `Duplicate node id '${node.id}' at index ${index}.`)
+      );
+    } else {
+      ids.add(node.id);
+    }
+
+    const typeKeys = Object.keys(node.node_type ?? {});
+    const kind = typeKeys[0];
+    if (!kind || !supportedTypes.has(kind)) {
+      messages.push(
+        toValidationMessage("graph", "error", `Node '${node.id}' has unsupported type '${kind ?? "unknown"}'.`)
+      );
+    }
+
+    if ("custom_worker" in node.node_type) {
+      const handler = node.node_type.custom_worker?.handler;
+      if (!handler || handler.trim().length === 0) {
+        messages.push(
+          toValidationMessage("graph", "error", `Custom worker node '${node.id}' requires a handler.`)
+        );
+      }
+    }
+  });
+
+  if (!idSet.has(flow.entry_node)) {
+    messages.push(
+      toValidationMessage("graph", "error", `Entry node '${flow.entry_node}' is not defined in nodes.`)
+    );
+  }
+
+  (flow.edges ?? []).forEach((edge) => {
+    if (!idSet.has(edge.from)) {
+      messages.push(
+        toValidationMessage("graph", "error", `Edge references missing 'from' node '${edge.from}'.`)
+      );
+    }
+    if (!idSet.has(edge.to)) {
+      messages.push(
+        toValidationMessage("graph", "error", `Edge references missing 'to' node '${edge.to}'.`)
+      );
+    }
+  });
+
+  flow.nodes.forEach((node) => {
+    if (!("switch" in node.node_type)) {
+      return;
+    }
+    const spec = node.node_type.switch;
+    (spec.branches ?? []).forEach((branch, index) => {
+      if (branch.target && !idSet.has(branch.target)) {
+        messages.push(
+          toValidationMessage(
+            "graph",
+            "error",
+            `Switch node '${node.id}' branch ${index + 1} references missing target '${branch.target}'.`
+          )
+        );
+      }
+    });
+    if (spec.default && !idSet.has(spec.default)) {
+      messages.push(
+        toValidationMessage(
+          "graph",
+          "error",
+          `Switch node '${node.id}' default references missing target '${spec.default}'.`
+        )
+      );
+    }
+  });
+
+  return messages;
+}
+
+function validateYamlInput(input: string): ValidationSummary {
+  const { doc, lineCounter, messages } = buildYamlDiagnostics(input);
+  const functionRefs = extractFunctionRefs(input, lineCounter);
+
+  if (doc.errors.length > 0) {
+    return {
+      parsedFlow: null,
+      parsedGraphFlow: null,
+      messages,
+      functionRefs
+    };
+  }
+
+  const parsed = doc.toJSON();
+  let parsedFlow: FlowDoc | null = null;
+  let parsedGraphFlow: GraphWorkflowDoc | null = null;
+  let flowError: string | null = null;
+  let graphError: string | null = null;
+
+  try {
+    parsedFlow = parseFlowFromObject(parsed);
+  } catch (error) {
+    flowError = error instanceof Error ? error.message : "Invalid flow workflow.";
+  }
+
+  try {
+    parsedGraphFlow = parseGraphFlowFromObject(parsed);
+  } catch (error) {
+    graphError = error instanceof Error ? error.message : "Invalid graph workflow.";
+  }
+
+  if (!parsedFlow && !parsedGraphFlow) {
+    if (flowError) {
+      messages.push(toValidationMessage("flow", "error", flowError));
+    }
+    if (graphError) {
+      messages.push(toValidationMessage("graph", "error", graphError));
+    }
+    messages.push(toValidationMessage("yaml", "error", "YAML does not match a flow or graph workflow."));
+  }
+
+  if (parsedFlow) {
+    messages.push(...validateFlowSemantics(parsedFlow));
+  }
+
+  if (parsedGraphFlow) {
+    messages.push(...validateGraphSemantics(parsedGraphFlow));
+  }
+
+  if (parsedFlow && parsedGraphFlow) {
+    messages.push(
+      toValidationMessage(
+        "yaml",
+        "warning",
+        "Both flow and graph workflow shapes detected; graph workflow will be used for execution."
+      )
+    );
+  }
+
+  return {
+    parsedFlow,
+    parsedGraphFlow,
+    messages,
+    functionRefs
+  };
+}
+
+function formatValidationLabel(message: ValidationMessage): string {
+  if (message.line === undefined || message.column === undefined) {
+    return message.message;
+  }
+  return `Line ${message.line}, Col ${message.column}: ${message.message}`;
+}
+
+function extractFunctionNamesFromCode(
+  ts: typeof import("typescript"),
+  sourceFile: import("typescript").SourceFile
+): string[] {
+  const names = new Set<string>();
+
+  const visit = (node: import("typescript").Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      names.add(node.name.text);
+    }
+
+    if (ts.isVariableStatement(node)) {
+      node.declarationList.declarations.forEach((decl) => {
+        if (!ts.isIdentifier(decl.name) || !decl.initializer) {
+          return;
+        }
+        if (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) {
+          names.add(decl.name.text);
+        }
+      });
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(sourceFile, visit);
+  return [...names];
 }
 
 function getValueFromPath(source: unknown, path: string): unknown {
@@ -969,6 +1323,12 @@ export default function PlaygroundPage() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">("dark");
   const [flowSvg, setFlowSvg] = useState<string>("");
   const [flowRenderError, setFlowRenderError] = useState<string | null>(null);
+  const [codeValidation, setCodeValidation] = useState<CodeValidationSummary>({
+    errors: [],
+    warnings: [],
+    declaredFunctions: [],
+    ready: false
+  });
   const [config, setConfig] = useState<ProviderConfig>({
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
@@ -1116,28 +1476,55 @@ export default function PlaygroundPage() {
     return () => window.clearTimeout(timeout);
   }, [copyFeedback]);
 
-  const parsedFlow = useMemo(() => {
-    try {
-      return parseFlow(yamlInput);
-    } catch {
-      return null;
-    }
-  }, [yamlInput]);
+  const yamlValidation = useMemo(() => validateYamlInput(yamlInput), [yamlInput]);
+  const parsedFlow = yamlValidation.parsedFlow;
+  const parsedGraphFlow = yamlValidation.parsedGraphFlow;
+  const yamlErrors = useMemo(
+    () => yamlValidation.messages.filter((item) => item.level === "error"),
+    [yamlValidation.messages]
+  );
+  const yamlWarnings = useMemo(
+    () => yamlValidation.messages.filter((item) => item.level === "warning"),
+    [yamlValidation.messages]
+  );
 
-  const parsedGraphFlow = useMemo(() => {
-    try {
-      return parseGraphFlow(yamlInput);
-    } catch {
-      return null;
+  const codeErrors = useMemo(() => {
+    if (!codeValidation.ready) {
+      return codeValidation.errors;
     }
-  }, [yamlInput]);
+    const errors = [...codeValidation.errors];
+    const known = new Set(codeValidation.declaredFunctions);
+    const missing = new Set<string>();
+    yamlValidation.functionRefs.forEach((ref) => {
+      if (!known.has(ref.name)) {
+        missing.add(ref.name);
+        errors.push(
+          toValidationMessage(
+            "code",
+            "error",
+            `Referenced ${ref.kind} '${ref.name}' was not found in custom JS/TS.`,
+            ref.line,
+            ref.column
+          )
+        );
+      }
+    });
+    if (missing.size > 0 && codeInput.trim().length === 0) {
+      errors.push(toValidationMessage("code", "error", "Custom JS/TS editor is empty."));
+    }
+    return errors;
+  }, [codeValidation, yamlValidation.functionRefs, codeInput]);
+
+  const codeWarnings = useMemo(() => codeValidation.warnings, [codeValidation.warnings]);
+  const hasYamlErrors = yamlErrors.length > 0;
+  const hasCodeErrors = codeErrors.length > 0;
 
   const mermaidSource = useMemo(() => {
-    if (parsedFlow !== null) {
-      return flowToMermaid(parsedFlow, activeStepId);
-    }
     if (parsedGraphFlow !== null) {
       return graphFlowToMermaid(parsedGraphFlow, activeStepId);
+    }
+    if (parsedFlow !== null) {
+      return flowToMermaid(parsedFlow, activeStepId);
     }
     return "";
   }, [activeStepId, parsedFlow, parsedGraphFlow]);
@@ -1183,6 +1570,73 @@ export default function PlaygroundPage() {
       cancelled = true;
     };
   }, [mermaidSource]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const validateCode = async () => {
+      const errors: ValidationMessage[] = [];
+      const warnings: ValidationMessage[] = [];
+      let declaredFunctions: string[] = [];
+
+      if (/\bimport\b|\brequire\b/.test(codeInput)) {
+        errors.push(
+          toValidationMessage("code", "error", "Imports are not allowed in custom JS/TS functions.")
+        );
+      }
+
+      try {
+        const tsModule = await import("typescript");
+        const ts = tsModule.default ?? tsModule;
+        const sourceFile = ts.createSourceFile(
+          "custom.ts",
+          codeInput,
+          ts.ScriptTarget.ES2022,
+          true,
+          ts.ScriptKind.TSX
+        );
+
+        sourceFile.parseDiagnostics.forEach((diag) => {
+          const position = typeof diag.start === "number" ? diag.start : 0;
+          const { line, character } = sourceFile.getLineAndCharacterOfPosition(position);
+          errors.push(
+            toValidationMessage(
+              "code",
+              "error",
+              ts.flattenDiagnosticMessageText(diag.messageText, "\n"),
+              line + 1,
+              character + 1
+            )
+          );
+        });
+
+        declaredFunctions = extractFunctionNamesFromCode(ts, sourceFile);
+      } catch {
+        warnings.push(
+          toValidationMessage(
+            "code",
+            "warning",
+            "JS/TS validation is unavailable in this environment."
+          )
+        );
+      }
+
+      if (!cancelled) {
+        setCodeValidation({
+          errors,
+          warnings,
+          declaredFunctions,
+          ready: true
+        });
+      }
+    };
+
+    void validateCode();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [codeInput]);
 
   const applyExample = async (name: string) => {
     const example = EXAMPLES[name];
@@ -1289,6 +1743,16 @@ export default function PlaygroundPage() {
       setChatMessages((prev) => [
         ...prev,
         { role: "assistant", content: "Add base URL, API key, and model first." }
+      ]);
+      return;
+    }
+
+    if (hasYamlErrors || hasCodeErrors) {
+      setRunState("failed");
+      setLogs((prev) => [...prev, "Validation failed: fix YAML/JS errors before running."]);
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Fix the validation errors in the editors before running." }
       ]);
       return;
     }
@@ -1541,10 +2005,31 @@ export default function PlaygroundPage() {
               </div>
               <textarea
                 id="yaml-editor"
-                className="yaml-editor"
+                className={`yaml-editor${hasYamlErrors ? " editor-invalid" : ""}`}
+                aria-invalid={hasYamlErrors}
                 value={yamlInput}
                 onChange={(event) => updateActiveDraft({ yaml: event.target.value })}
               />
+              {yamlErrors.length > 0 ? (
+                <div className="editor-validation error" role="alert">
+                  <div className="editor-validation-title">YAML validation errors</div>
+                  {yamlErrors.map((item, index) => (
+                    <p key={`${item.message}-${index}`} className="mono-value">
+                      {formatValidationLabel(item)}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              {yamlWarnings.length > 0 ? (
+                <div className="editor-validation warning">
+                  <div className="editor-validation-title">YAML warnings</div>
+                  {yamlWarnings.map((item, index) => (
+                    <p key={`${item.message}-${index}`} className="mono-value">
+                      {formatValidationLabel(item)}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="field">
@@ -1564,9 +2049,31 @@ export default function PlaygroundPage() {
               </p>
               <textarea
                 id="code-editor"
+                className={hasCodeErrors ? "editor-invalid" : undefined}
+                aria-invalid={hasCodeErrors}
                 value={codeInput}
                 onChange={(event) => updateActiveDraft({ code: event.target.value })}
               />
+              {codeErrors.length > 0 ? (
+                <div className="editor-validation error" role="alert">
+                  <div className="editor-validation-title">Custom JS/TS errors</div>
+                  {codeErrors.map((item, index) => (
+                    <p key={`${item.message}-${index}`} className="mono-value">
+                      {formatValidationLabel(item)}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              {codeWarnings.length > 0 ? (
+                <div className="editor-validation warning">
+                  <div className="editor-validation-title">Custom JS/TS warnings</div>
+                  {codeWarnings.map((item, index) => (
+                    <p key={`${item.message}-${index}`} className="mono-value">
+                      {formatValidationLabel(item)}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="field">
@@ -1690,7 +2197,16 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="flow-area">
-            {parsedFlow || parsedGraphFlow ? (
+            {hasYamlErrors ? (
+              <div className="editor-validation error" role="alert">
+                <div className="editor-validation-title">Workflow visualizer unavailable</div>
+                {yamlErrors.map((item, index) => (
+                  <p key={`${item.message}-${index}`} className="mono-value">
+                    {formatValidationLabel(item)}
+                  </p>
+                ))}
+              </div>
+            ) : parsedFlow || parsedGraphFlow ? (
               <>
                 {flowRenderError ? (
                   <p className="mono-value">{flowRenderError}</p>
