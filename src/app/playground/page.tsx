@@ -667,12 +667,16 @@ function toValidationMessage(
   };
 }
 
-function getLinePosition(lineCounter: LineCounter | null, offset: number | null | undefined) {
+function getLinePosition(
+  lineCounter: LineCounter | null,
+  offset: number | [number, number] | null | undefined
+) {
   if (!lineCounter || offset === null || offset === undefined) {
     return null;
   }
+  const normalizedOffset = Array.isArray(offset) ? offset[0] : offset;
   try {
-    return lineCounter.linePos(offset);
+    return lineCounter.linePos(normalizedOffset);
   } catch {
     return null;
   }
@@ -684,7 +688,7 @@ function buildYamlDiagnostics(input: string) {
   const messages: ValidationMessage[] = [];
 
   doc.errors.forEach((error) => {
-    const position = getLinePosition(lineCounter, error.pos ?? error.range?.[0]);
+    const position = getLinePosition(lineCounter, error.pos);
     messages.push(
       toValidationMessage(
         "yaml",
@@ -697,7 +701,7 @@ function buildYamlDiagnostics(input: string) {
   });
 
   doc.warnings.forEach((warning) => {
-    const position = getLinePosition(lineCounter, warning.pos ?? warning.range?.[0]);
+    const position = getLinePosition(lineCounter, warning.pos);
     messages.push(
       toValidationMessage(
         "yaml",
@@ -1595,8 +1599,16 @@ export default function PlaygroundPage() {
           true,
           ts.ScriptKind.TSX
         );
+        const transpiled = ts.transpileModule(codeInput, {
+          compilerOptions: {
+            target: ts.ScriptTarget.ES2022,
+            jsx: ts.JsxEmit.React
+          },
+          reportDiagnostics: true,
+          fileName: "custom.ts"
+        });
 
-        sourceFile.parseDiagnostics.forEach((diag) => {
+        (transpiled.diagnostics ?? []).forEach((diag) => {
           const position = typeof diag.start === "number" ? diag.start : 0;
           const { line, character } = sourceFile.getLineAndCharacterOfPosition(position);
           errors.push(
