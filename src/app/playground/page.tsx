@@ -1702,7 +1702,9 @@ export default function PlaygroundPage() {
                 )}
                 <details className="mermaid-source">
                   <summary className="label">Visualize output (Mermaid)</summary>
-                  <pre className="mono-value">{mermaidSource}</pre>
+                  <div className="mermaid-source-panel">
+                    <pre className="mono-value">{mermaidSource}</pre>
+                  </div>
                 </details>
               </>
             ) : (

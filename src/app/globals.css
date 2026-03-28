@@ -768,7 +768,7 @@ textarea {
 }
 
 .flow-area {
-  flex: 1;
+  flex: 0 0 auto;
   border: 1px solid var(--dark-ink);
   border-radius: var(--radius-card-sm);
   padding: var(--space-12);
@@ -786,19 +786,62 @@ textarea {
 }
 
 .mermaid-source {
-  margin-top: var(--space-12);
-  border-top: 1px solid var(--dark-ink);
-  padding-top: var(--space-8);
+  margin-top: var(--space-10);
+}
+
+.mermaid-source > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  border: 1px solid var(--dark-ink);
+  border-radius: 10px;
+  background: var(--panel-muted);
+  user-select: none;
+}
+
+.mermaid-source > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mermaid-source > summary::after {
+  content: "+";
+  font-size: 14px;
+  line-height: 1;
+}
+
+.mermaid-source[open] > summary::after {
+  content: "-";
+}
+
+.mermaid-source-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 180ms ease;
+}
+
+.mermaid-source[open] .mermaid-source-panel {
+  grid-template-rows: 1fr;
+  margin-top: var(--space-8);
+}
+
+.mermaid-source-panel > pre {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .mermaid-source pre {
-  margin-top: var(--space-8);
+  margin-top: 0;
   margin-bottom: 0;
   white-space: pre-wrap;
   background: var(--panel-muted);
   border: 1px solid var(--dark-ink);
   border-radius: 10px;
   padding: 10px;
+  max-height: min(320px, 40vh);
+  overflow: auto;
 }
 
 .flow-node {
