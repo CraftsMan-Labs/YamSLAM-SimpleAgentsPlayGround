@@ -740,6 +740,39 @@ textarea {
   min-height: 320px;
 }
 
+.editor-invalid {
+  border-color: #c9754b;
+  box-shadow: 0 0 0 2px rgba(231, 132, 104, 0.2);
+}
+
+.editor-validation {
+  margin-top: var(--space-12);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dark-ink);
+  background: var(--panel-muted);
+  display: grid;
+  gap: 6px;
+}
+
+.editor-validation-title {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-default);
+}
+
+.editor-validation.error {
+  border-color: #c9754b;
+  background: rgba(231, 132, 104, 0.12);
+}
+
+.editor-validation.warning {
+  border-color: #c9a24b;
+  background: rgba(201, 162, 75, 0.12);
+}
+
 .run-row {
   display: flex;
   justify-content: flex-end;
