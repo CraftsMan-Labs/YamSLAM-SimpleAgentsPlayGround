@@ -30,6 +30,13 @@ type WasmMessage = {
   content: string;
 };
 
+type WorkflowRunResultLike = {
+  events?: unknown[];
+  outputs?: Record<string, unknown>;
+  terminal_output?: unknown;
+  output?: unknown;
+};
+
 type WasmClientLike = {
   complete: (model: string, promptOrMessages: string | WasmMessage[]) => Promise<WasmCompletionResult>;
   streamEvents: (
@@ -41,6 +48,19 @@ type WasmClientLike = {
       error?: { message?: string };
     }) => void
   ) => Promise<unknown>;
+  runWorkflowYamlString: (
+    yamlText: string,
+    workflowInput: Record<string, unknown>,
+    workflowOptions?: {
+      functions?: Record<
+        string,
+        (
+          args: Record<string, unknown>,
+          context: Record<string, unknown>
+        ) => unknown | Promise<unknown>
+      >;
+    }
+  ) => Promise<WorkflowRunResultLike>;
 };
 
 let wasmClientCache: { cacheKey: string; client: WasmClientLike } | null = null;
@@ -95,12 +115,15 @@ type GraphLlmNode = {
   node_type: {
     llm_call: {
       model?: string;
+      temperature?: number;
       messages_path?: string;
       append_prompt_as_user?: boolean;
+      stream?: boolean;
     };
   };
   config?: {
     prompt?: string;
+    output_schema?: unknown;
   };
 };
 
@@ -119,6 +142,7 @@ type GraphCustomWorkerNode = {
   node_type: {
     custom_worker: {
       handler?: string;
+      handler_file?: string;
     };
   };
   config?: {
@@ -685,6 +709,104 @@ async function callProviderStream(
   return aggregate;
 }
 
+async function callProviderComplete(
+  config: ProviderConfig,
+  promptOrMessages: string | WasmMessage[],
+  options?: {
+    model?: string;
+    temperature?: number;
+  }
+): Promise<string> {
+  const wasmClient = await loadWasmClient(config);
+  const result = await wasmClient.complete(options?.model ?? config.model, promptOrMessages);
+  if (typeof result.content !== "string" || result.content.length === 0) {
+    throw new Error("WASM completion response had no message content.");
+  }
+  return result.content;
+}
+
+function getGraphPathValue(source: unknown, path: string): unknown {
+  if (source === null || source === undefined || typeof source !== "object") {
+    return undefined;
+  }
+  const normalizedPath = path.trim().replace(/^\$\./, "");
+  const tokens = normalizedPath.split(".").filter((token) => token.length > 0);
+  let current: unknown = source;
+  for (const token of tokens) {
+    if (current === null || current === undefined || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[token];
+  }
+  return current;
+}
+
+function interpolateGraphTemplate(template: string, context: unknown): string {
+  return template.replace(/{{\s*([^}]+)\s*}}/g, (_, token: string) => {
+    const resolved = getGraphPathValue(context, token);
+    if (resolved === null || resolved === undefined) {
+      return "";
+    }
+    if (typeof resolved === "string") {
+      return resolved;
+    }
+    return safeString(resolved);
+  });
+}
+
+function interpolateGraphValue(value: unknown, context: unknown): unknown {
+  if (typeof value === "string") {
+    return interpolateGraphTemplate(value, context);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => interpolateGraphValue(entry, context));
+  }
+  if (value !== null && value !== undefined && typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      output[key] = interpolateGraphValue(nested, context);
+    }
+    return output;
+  }
+  return value;
+}
+
+function parseJsonFromText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const candidate = text.slice(start, end + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        return text;
+      }
+    }
+    return text;
+  }
+}
+
+function evaluateGraphSwitchCondition(condition: string, context: unknown): boolean {
+  const trimmed = condition.trim();
+
+  const eq = trimmed.match(/^\$\.([A-Za-z0-9_.]+)\s*==\s*"([\s\S]*)"$/);
+  if (eq) {
+    const left = getGraphPathValue(context, eq[1]);
+    return safeString(left ?? "") === eq[2];
+  }
+
+  const ne = trimmed.match(/^\$\.([A-Za-z0-9_.]+)\s*!=\s*"([\s\S]*)"$/);
+  if (ne) {
+    const left = getGraphPathValue(context, ne[1]);
+    return safeString(left ?? "") !== ne[2];
+  }
+
+  return false;
+}
+
 function parseGraphFlowFromObject(parsed: unknown): GraphWorkflowDoc {
   if (
     parsed === null ||
@@ -1062,101 +1184,6 @@ function detectDisallowedImports(
   return hasImport;
 }
 
-function getValueFromPath(source: unknown, path: string): unknown {
-  if (source === null || source === undefined || typeof source !== "object") {
-    return undefined;
-  }
-  const parts = path.split(".").filter((token) => token.length > 0);
-  let current: unknown = source;
-  for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
-function interpolateGraphPrompt(template: string, context: Record<string, unknown>): string {
-  return template.replace(/{{\s*([^}]+)\s*}}/g, (_, token: string) => {
-    const resolved = getValueFromPath(context, token.trim());
-    if (resolved === undefined || resolved === null) {
-      return "";
-    }
-    if (typeof resolved === "string") {
-      return resolved;
-    }
-    return JSON.stringify(resolved);
-  });
-}
-
-function interpolateGraphValue(value: unknown, context: Record<string, unknown>): unknown {
-  if (typeof value === "string") {
-    return value.replace(/{{\s*([^}]+)\s*}}/g, (_, token: string) => {
-      const resolved = getValueFromPath(context, token.trim())
-      if (resolved === undefined || resolved === null) {
-        return ""
-      }
-      if (typeof resolved === "string") {
-        return resolved
-      }
-      return JSON.stringify(resolved)
-    })
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => interpolateGraphValue(entry, context))
-  }
-
-  if (value !== null && value !== undefined && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
-        key,
-        interpolateGraphValue(nested, context)
-      ])
-    )
-  }
-
-  return value
-}
-
-function parsePossiblyJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    const start = value.indexOf("{");
-    const end = value.lastIndexOf("}");
-    if (start !== -1 && end !== -1 && end > start) {
-      try {
-        return JSON.parse(value.slice(start, end + 1));
-      } catch {
-        return value;
-      }
-    }
-    return value;
-  }
-}
-
-function evaluateGraphSwitchCondition(
-  condition: string | undefined,
-  context: Record<string, unknown>
-): boolean {
-  if (!condition) {
-    return false;
-  }
-  const eq = condition.match(/^\$\.([A-Za-z0-9_\.]+)\s*==\s*"([\s\S]*)"$/);
-  if (eq) {
-    const left = getValueFromPath(context, eq[1]);
-    return String(left ?? "") === eq[2];
-  }
-  const ne = condition.match(/^\$\.([A-Za-z0-9_\.]+)\s*!=\s*"([\s\S]*)"$/);
-  if (ne) {
-    const left = getValueFromPath(context, ne[1]);
-    return String(left ?? "") !== ne[2];
-  }
-  return false;
-}
-
 function formatGraphChatOutput(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -1189,167 +1216,240 @@ function sanitizeCustomCode(source: string): string {
   return withoutTypes.replace(/\bexport\s+/g, "");
 }
 
-function executeCustomWorkerHandler(input: {
-  code: string;
-  handler: string;
-  payload: unknown;
-  context: Record<string, unknown>;
-}): unknown {
-  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(input.handler)) {
-    throw new Error(`Invalid custom worker handler name '${input.handler}'.`);
+function buildWorkflowFunctionRegistry(input: {
+  customCode: string;
+  graphWorkflow: GraphWorkflowDoc;
+  functionRefs: ValidationSummary["functionRefs"];
+}): Record<
+  string,
+  (args: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>
+> {
+  if (input.customCode.trim().length === 0) {
+    return {};
   }
 
-  const runnableCode = sanitizeCustomCode(input.code);
-  const fn = new Function(
-    "payload",
-    "context",
-    `${runnableCode}\nif (typeof ${input.handler} !== "function") { throw new Error("Custom worker function '${input.handler}' was not found."); }\nreturn ${input.handler}(payload, context);`
-  ) as (payload: unknown, context: Record<string, unknown>) => unknown;
+  const symbolNames = new Set<string>();
+  input.functionRefs.forEach((ref) => {
+    symbolNames.add(ref.name);
+  });
+  input.graphWorkflow.nodes.forEach((node) => {
+    if ("custom_worker" in node.node_type) {
+      const handler = node.node_type.custom_worker?.handler;
+      if (typeof handler === "string" && handler.trim().length > 0) {
+        symbolNames.add(handler);
+      }
+    }
+  });
 
-  return fn(input.payload, input.context);
+  if (symbolNames.size === 0) {
+    return {};
+  }
+
+  const runnableCode = sanitizeCustomCode(input.customCode);
+  const symbolEntries = [...symbolNames]
+    .map((name) => `${JSON.stringify(name)}: (typeof ${name} === "function" ? ${name} : undefined)`)
+    .join(",\n");
+  const scope = new Function(`${runnableCode}\nreturn {${symbolEntries}};`)() as Record<string, unknown>;
+
+  const functions: Record<
+    string,
+    (args: Record<string, unknown>, context: Record<string, unknown>) => unknown | Promise<unknown>
+  > = {};
+  for (const name of symbolNames) {
+    const candidate = scope[name];
+    if (typeof candidate === "function") {
+      functions[name] = candidate as (
+        args: Record<string, unknown>,
+        context: Record<string, unknown>
+      ) => unknown | Promise<unknown>;
+    }
+  }
+
+  input.graphWorkflow.nodes.forEach((node) => {
+    if (!("custom_worker" in node.node_type)) {
+      return;
+    }
+    const handler = node.node_type.custom_worker?.handler;
+    const handlerFile = node.node_type.custom_worker?.handler_file;
+    if (
+      typeof handler === "string" &&
+      handler.length > 0 &&
+      typeof handlerFile === "string" &&
+      handlerFile.length > 0 &&
+      functions[handler]
+    ) {
+      functions[`${handlerFile}#${handler}`] = functions[handler];
+    }
+  });
+
+  return functions;
 }
 
-async function executeGraphWorkflowForChat(
-  workflow: GraphWorkflowDoc,
-  inputMessages: ChatMessage[],
-  config: ProviderConfig,
-  customCode: string,
+async function executeGraphWorkflowForChat(input: {
+  yamlSource: string;
+  graphWorkflow: GraphWorkflowDoc;
+  inputMessages: ChatMessage[];
+  config: ProviderConfig;
+  customCode: string;
+  functionRefs: ValidationSummary["functionRefs"];
   hooks?: {
     onLog?: (line: string) => void;
     onActiveStep?: (stepId: string | null) => void;
     onStepStream?: (stepId: string, content: string) => void;
-  }
-): Promise<string> {
-  const nodeById = new Map<string, GraphNode>();
-  workflow.nodes.forEach((node) => nodeById.set(node.id, node));
-
-  const edgeMap = new Map<string, string[]>();
-  (workflow.edges ?? []).forEach((edge) => {
-    const existing = edgeMap.get(edge.from) ?? [];
-    existing.push(edge.to);
-    edgeMap.set(edge.from, existing);
+  };
+}): Promise<string> {
+  const functions = buildWorkflowFunctionRegistry({
+    customCode: input.customCode,
+    graphWorkflow: input.graphWorkflow,
+    functionRefs: input.functionRefs
   });
+  input.hooks?.onLog?.(
+    `Executing graph with streaming-aware runner (${Object.keys(functions).length} function bindings)`
+  );
 
-  const context: Record<string, unknown> = {
+  const nodeById = new Map(input.graphWorkflow.nodes.map((node) => [node.id, node]));
+  const edgeMap = new Map<string, string[]>();
+  for (const edge of input.graphWorkflow.edges ?? []) {
+    const targets = edgeMap.get(edge.from) ?? [];
+    targets.push(edge.to);
+    edgeMap.set(edge.from, targets);
+  }
+
+  const graphContext: Record<string, unknown> = {
     input: {
-      messages: inputMessages
+      messages: input.inputMessages
     },
     nodes: {}
   };
 
-  let pointer = workflow.entry_node;
-  let finalOutput: unknown = "";
+  let pointer = input.graphWorkflow.entry_node;
+  let iterations = 0;
+  let output: unknown = null;
 
-  for (let i = 0; i < 200; i += 1) {
-    const node = nodeById.get(pointer);
-    if (!node) {
-      throw new Error(`Workflow references unknown node '${pointer}'.`);
+  while (pointer.length > 0) {
+    iterations += 1;
+    if (iterations > 1000) {
+      throw new Error("workflow exceeded maximum step iterations");
     }
 
-    hooks?.onActiveStep?.(node.id);
-    hooks?.onLog?.(`Running step: ${node.id}`);
+    const node = nodeById.get(pointer);
+    if (!node) {
+      throw new Error(`workflow references unknown node '${pointer}'`);
+    }
+
+    input.hooks?.onActiveStep?.(node.id);
 
     if ("llm_call" in node.node_type) {
       const llmNode = node as GraphLlmNode;
+      input.hooks?.onLog?.(`Step started: ${node.id} (llm_call)`);
       const llm = llmNode.node_type.llm_call;
-      const configuredModel = config.model.trim();
-      const selectedModel = configuredModel.length > 0 ? configuredModel : llm.model;
-      const prompt = interpolateGraphPrompt(llmNode.config?.prompt ?? "", context);
-      let promptOrMessages: string | WasmMessage[] = prompt;
+      const model = llm.model ?? input.config.model;
+      if (typeof model !== "string" || model.trim().length === 0) {
+        throw new Error(`llm_call node '${node.id}' requires model`);
+      }
 
+      const prompt = interpolateGraphTemplate(llmNode.config?.prompt ?? "", graphContext);
+      let promptOrMessages: string | WasmMessage[] = prompt;
       if (llm.messages_path === "input.messages") {
-        const source = getValueFromPath(context, "input.messages");
+        const source = getGraphPathValue(graphContext, llm.messages_path);
         const history = Array.isArray(source)
           ? source
-              .map((msg) => {
-                if (msg && typeof msg === "object") {
-                  const role = (msg as Record<string, unknown>).role;
-                  const content = (msg as Record<string, unknown>).content;
-                  if (
-                    (role === "system" || role === "user" || role === "assistant" || role === "tool") &&
-                    typeof content === "string"
-                  ) {
-                    return { role, content } as WasmMessage;
-                  }
-                }
-                return null;
-              })
-              .filter((msg): msg is WasmMessage => msg !== null)
+              .filter(
+                (message): message is WasmMessage =>
+                  message !== null &&
+                  message !== undefined &&
+                  typeof message === "object" &&
+                  (message as { role?: unknown }).role !== undefined &&
+                  typeof (message as { content?: unknown }).content === "string"
+              )
+              .map((message) => ({ role: message.role, content: message.content }))
           : [];
-
         if (llm.append_prompt_as_user !== false) {
           history.push({ role: "user", content: prompt });
         }
         promptOrMessages = history;
       }
 
-      const content = await callProviderStream(config, promptOrMessages, {
-        model: selectedModel,
-        onDelta: (_chunk, aggregate) => {
-          hooks?.onStepStream?.(node.id, aggregate);
-        }
-      });
-      const parsedOutput = parsePossiblyJson(content);
-      hooks?.onLog?.(`Completed llm_call: ${node.id}`);
-      const nodesBucket = context.nodes as Record<string, unknown>;
-      nodesBucket[node.id] = { output: parsedOutput, raw: content };
-      finalOutput = parsedOutput;
+      const streamEnabled = llm.stream === true;
+      const rawContent = streamEnabled
+        ? await callProviderStream(input.config, promptOrMessages, {
+            model,
+            onDelta: (_chunk, aggregate) => {
+              input.hooks?.onStepStream?.(node.id, aggregate);
+            }
+          })
+        : await callProviderComplete(input.config, promptOrMessages, {
+            model,
+            temperature: llm.temperature
+          });
 
-      const nextList = edgeMap.get(node.id) ?? [];
-      pointer = nextList[0] ?? "";
-      if (pointer.length === 0) {
-        break;
+      if (!streamEnabled) {
+        input.hooks?.onStepStream?.(node.id, rawContent);
       }
+
+      const parsedOutput = parseJsonFromText(rawContent);
+      (graphContext.nodes as Record<string, unknown>)[node.id] = {
+        output: parsedOutput,
+        raw: rawContent
+      };
+      output = parsedOutput;
+
+      const nextTargets = edgeMap.get(node.id) ?? [];
+      pointer = nextTargets[0] ?? "";
+      input.hooks?.onLog?.(`Step completed: ${node.id}`);
       continue;
     }
 
     if ("switch" in node.node_type) {
-      const switchNode = node as GraphSwitchNode;
-      const spec = switchNode.node_type.switch;
-      const target = (spec.branches ?? []).find((branch) =>
-        evaluateGraphSwitchCondition(branch.condition, context)
-      )?.target;
-      hooks?.onLog?.(`Switch route: ${target ?? spec.default ?? "(end)"}`);
-      pointer = target ?? spec.default ?? "";
-      if (pointer.length === 0) {
-        break;
-      }
+      input.hooks?.onLog?.(`Step started: ${node.id} (switch)`);
+      const spec = node.node_type.switch;
+      const branches = Array.isArray(spec.branches) ? spec.branches : [];
+      const matched = branches.find(
+        (branch) =>
+          typeof branch.condition === "string" &&
+          evaluateGraphSwitchCondition(branch.condition, graphContext)
+      );
+      pointer = matched?.target ?? spec.default ?? "";
+      output = matched?.target ?? spec.default ?? output;
+      input.hooks?.onLog?.(`Step completed: ${node.id}`);
       continue;
     }
 
     if ("custom_worker" in node.node_type) {
-      const customNode = node as GraphCustomWorkerNode;
-      const handler = customNode.node_type.custom_worker.handler ?? "GetRagData";
-      const payload = interpolateGraphValue(
-        customNode.config?.payload ?? { topic: "custom_worker" },
-        context
-      );
-      const workerOutput = executeCustomWorkerHandler({
-        code: customCode,
-        handler,
-        payload,
-        context
-      });
-      const nodesBucket = context.nodes as Record<string, unknown>;
-      nodesBucket[node.id] = { output: workerOutput };
-      finalOutput = workerOutput;
-      hooks?.onLog?.(`Custom worker output (${handler}) ready.`);
-
-      const nextList = edgeMap.get(node.id) ?? [];
-      pointer = nextList[0] ?? "";
-      if (pointer.length === 0) {
-        break;
+      const customWorkerNode = node as GraphCustomWorkerNode;
+      input.hooks?.onLog?.(`Step started: ${node.id} (custom_worker)`);
+      const handler = node.node_type.custom_worker?.handler ?? "custom_worker";
+      const fn = functions[handler];
+      if (typeof fn !== "function") {
+        throw new Error(`custom_worker node '${node.id}' requires workflow function '${handler}'`);
       }
+
+      const workerOutput = await fn(
+        {
+          handler,
+          payload: interpolateGraphValue(customWorkerNode.config?.payload ?? null, graphContext),
+          nodeId: node.id
+        },
+        graphContext
+      );
+      (graphContext.nodes as Record<string, unknown>)[node.id] = {
+        output: workerOutput
+      };
+      input.hooks?.onStepStream?.(node.id, formatGraphChatOutput(workerOutput));
+      output = workerOutput;
+
+      const nextTargets = edgeMap.get(node.id) ?? [];
+      pointer = nextTargets[0] ?? "";
+      input.hooks?.onLog?.(`Step completed: ${node.id}`);
       continue;
     }
 
-    throw new Error(`Unsupported node type at '${node.id}'.`);
+    throw new Error(`Unsupported node_type for node '${node.id}'`);
   }
 
-  hooks?.onActiveStep?.(null);
-  hooks?.onLog?.("Workflow run complete.");
-
-  return formatGraphChatOutput(finalOutput);
+  input.hooks?.onActiveStep?.(null);
+  input.hooks?.onLog?.("Workflow run complete.");
+  return formatGraphChatOutput(output);
 }
 
 function buildYamlAwareChatPrompt(input: {
@@ -1887,12 +1987,20 @@ export default function PlaygroundPage() {
       let answer: string;
       if (parsedGraphFlow !== null) {
         setLogs((prev) => [...prev, `Workflow mode: graph (${parsedGraphFlow.entry_node})`]);
-        answer = await executeGraphWorkflowForChat(parsedGraphFlow, historyForWorkflow, config, codeInput, {
-          onLog: (line) => setLogs((prev) => [...prev, line]),
-          onActiveStep: (stepId) => setActiveStepId(stepId),
-          onStepStream: (stepId, content) => {
-            setStepStreams((prev) => ({ ...prev, [stepId]: content }));
-            setAssistantContent(`[${stepId}] ${content}`);
+        answer = await executeGraphWorkflowForChat({
+          yamlSource: yamlInput,
+          graphWorkflow: parsedGraphFlow,
+          inputMessages: historyForWorkflow,
+          config,
+          customCode: codeInput,
+          functionRefs: yamlValidation.functionRefs,
+          hooks: {
+            onLog: (line) => setLogs((prev) => [...prev, line]),
+            onActiveStep: (stepId) => setActiveStepId(stepId),
+            onStepStream: (stepId, content) => {
+              setStepStreams((prev) => ({ ...prev, [stepId]: content }));
+              setAssistantContent(`[${stepId}] ${content}`);
+            }
           }
         });
       } else {
