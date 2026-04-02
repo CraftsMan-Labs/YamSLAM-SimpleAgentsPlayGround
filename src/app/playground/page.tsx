@@ -196,6 +196,11 @@ const YAML_WORKFLOW_DOCS_URL = "https://docs.simpleagents.craftsmanlabs.net/YAML
 const SKILLS_INSTALL_COMMAND = "npx skills add CraftsMan-Labs/SimpleAgents";
 const DEFAULT_EXAMPLE_NAME = "Quick hello";
 const DRAFT_SAVE_DEBOUNCE_MS = 180;
+const EXPORT_LANGUAGES: Array<{ id: ExportLanguage; label: string }> = [
+  { id: "js", label: "JS/TS" },
+  { id: "python", label: "Python" },
+  { id: "go", label: "Go" }
+];
 
 const EXAMPLES: Record<string, ExampleConfig> = {
   "Quick hello": {
@@ -504,6 +509,32 @@ function escapeMermaidLabel(label: string): string {
   return label.replace(/"/g, '\\"');
 }
 
+function getFlowNodeClass(stepType: FlowStep["type"]): string {
+  if (stepType === "set") {
+    return "nodeSet";
+  }
+  if (stepType === "llm_call") {
+    return "nodeLlm";
+  }
+  if (stepType === "output") {
+    return "nodeOutput";
+  }
+  if (stepType === "if") {
+    return "nodeSwitch";
+  }
+  return "nodeFunction";
+}
+
+function getGraphNodeClass(node: GraphNode): string {
+  if ("llm_call" in node.node_type) {
+    return "nodeLlm";
+  }
+  if ("switch" in node.node_type) {
+    return "nodeSwitch";
+  }
+  return "nodeFunction";
+}
+
 function buildMermaidEdges(flow: FlowDoc): MermaidEdge[] {
   const edges: MermaidEdge[] = [];
 
@@ -537,9 +568,11 @@ function flowToMermaid(flow: FlowDoc, activeStepId: string | null): string {
   const lines: string[] = ["flowchart TD"];
 
   flow.steps.forEach((step) => {
+    const nodeId = sanitizeMermaidId(step.id);
     lines.push(
-      `  ${sanitizeMermaidId(step.id)}["${escapeMermaidLabel(step.id)}\\n(${escapeMermaidLabel(step.type)})"]`
+      `  ${nodeId}["${escapeMermaidLabel(step.id)}\\n(${escapeMermaidLabel(step.type)})"]`
     );
+    lines.push(`  class ${nodeId} ${getFlowNodeClass(step.type)};`);
   });
 
   buildMermaidEdges(flow).forEach((edge) => {
@@ -557,6 +590,12 @@ function flowToMermaid(flow: FlowDoc, activeStepId: string | null): string {
     lines.push(`  class ${sanitizeMermaidId(activeStepId)} activeNode;`);
   }
 
+  lines.push("  classDef nodeSet fill:#163124,stroke:#3f9f71,color:#ddf8ea,stroke-width:1px;");
+  lines.push("  classDef nodeLlm fill:#152735,stroke:#51a7e6,color:#d7efff,stroke-width:1px;");
+  lines.push("  classDef nodeOutput fill:#3a2e14,stroke:#d8ad42,color:#fff0c4,stroke-width:1px;");
+  lines.push("  classDef nodeSwitch fill:#1e2b35,stroke:#6e8da7,color:#deedf7,stroke-width:1px;");
+  lines.push("  classDef nodeFunction fill:#33241e,stroke:#c08457,color:#fde9dd,stroke-width:1px;");
+
   return lines.join("\n");
 }
 
@@ -565,9 +604,11 @@ function graphFlowToMermaid(flow: GraphWorkflowDoc, activeStepId: string | null)
 
   flow.nodes.forEach((node) => {
     const kind = Object.keys(node.node_type)[0] ?? "node";
+    const nodeId = sanitizeMermaidId(node.id);
     lines.push(
-      `  ${sanitizeMermaidId(node.id)}["${escapeMermaidLabel(node.id)}\\n(${escapeMermaidLabel(kind)})"]`
+      `  ${nodeId}["${escapeMermaidLabel(node.id)}\\n(${escapeMermaidLabel(kind)})"]`
     );
+    lines.push(`  class ${nodeId} ${getGraphNodeClass(node)};`);
   });
 
   (flow.edges ?? []).forEach((edge) => {
@@ -598,6 +639,12 @@ function graphFlowToMermaid(flow: GraphWorkflowDoc, activeStepId: string | null)
     lines.push("  classDef activeNode fill:#fff2e8,stroke:#c9754b,stroke-width:2px;");
     lines.push(`  class ${sanitizeMermaidId(activeStepId)} activeNode;`);
   }
+
+  lines.push("  classDef nodeSet fill:#163124,stroke:#3f9f71,color:#ddf8ea,stroke-width:1px;");
+  lines.push("  classDef nodeLlm fill:#152735,stroke:#51a7e6,color:#d7efff,stroke-width:1px;");
+  lines.push("  classDef nodeOutput fill:#3a2e14,stroke:#d8ad42,color:#fff0c4,stroke-width:1px;");
+  lines.push("  classDef nodeSwitch fill:#1e2b35,stroke:#6e8da7,color:#deedf7,stroke-width:1px;");
+  lines.push("  classDef nodeFunction fill:#33241e,stroke:#c08457,color:#fde9dd,stroke-width:1px;");
 
   return lines.join("\n");
 }
@@ -1353,10 +1400,12 @@ export default function PlaygroundPage() {
   const [chatOpen, setChatOpen] = useState(true);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [chatValidationMessage, setChatValidationMessage] = useState<string | null>(null);
   const [chatPending, setChatPending] = useState(false);
   const [themeMode, setThemeMode] = useState<"light" | "dark">("dark");
   const [flowSvg, setFlowSvg] = useState<string>("");
   const [flowRenderError, setFlowRenderError] = useState<string | null>(null);
+  const [outputTab, setOutputTab] = useState<"output" | "logs">("output");
   const [codeValidation, setCodeValidation] = useState<CodeValidationSummary>({
     errors: [],
     warnings: [],
@@ -1376,6 +1425,7 @@ export default function PlaygroundPage() {
   const yamlInput = activeDraft.yaml;
   const codeInput = activeDraft.code;
   const sampleChatInputs = activeExample.chatInputs;
+  const isChatInputEmpty = chatInput.trim().length === 0;
   const draftSaveState =
     !isDraftHydrated || lastDraftSavedAt === null
       ? "Saving locally..."
@@ -1762,10 +1812,12 @@ export default function PlaygroundPage() {
   const clearChatHistory = () => {
     setChatMessages([]);
     setChatInput("");
+    setChatValidationMessage(null);
   };
 
   const applyChatExample = (prompt: string) => {
     setChatInput(prompt);
+    setChatValidationMessage(null);
     setChatOpen(true);
   };
 
@@ -1780,9 +1832,15 @@ export default function PlaygroundPage() {
 
   const sendChat = async () => {
     const prompt = chatInput.trim();
-    if (!prompt || chatPending) {
+    if (chatPending) {
       return;
     }
+    if (!prompt) {
+      setChatValidationMessage("Message cannot be empty.");
+      return;
+    }
+
+    setChatValidationMessage(null);
 
     if (!config.apiKey || !config.baseUrl || !config.model) {
       setRunState("failed");
@@ -1869,7 +1927,7 @@ export default function PlaygroundPage() {
 
   return (
     <main className="playground-shell">
-      <div className="pane-header" style={{ marginBottom: 16 }}>
+      <div className="pane-header playground-topbar">
         <div className="header-brand">
           <Image
             src={themeMode === "dark" ? craftsmanLogoWhite : craftsmanLogo}
@@ -1887,7 +1945,7 @@ export default function PlaygroundPage() {
         </div>
         <div className="header-links">
           <a
-            className="report-issue-link"
+            className="icon-link"
             href="https://github.com/CraftsMan-Labs/YamSLAM-SimpleAgentsPlayGround/issues"
             target="_blank"
             rel="noreferrer"
@@ -1898,7 +1956,6 @@ export default function PlaygroundPage() {
               <path d="M1.75 1.5h8.5c.97 0 1.75.78 1.75 1.75v8.5c0 .97-.78 1.75-1.75 1.75h-8.5A1.75 1.75 0 0 1 0 11.75v-8.5C0 2.28.78 1.5 1.75 1.5Zm0 1A.75.75 0 0 0 1 3.25v8.5c0 .41.34.75.75.75h8.5a.75.75 0 0 0 .75-.75v-8.5a.75.75 0 0 0-.75-.75h-8.5ZM14.5 0A1.5 1.5 0 0 1 16 1.5v9.25a.75.75 0 0 1-1.5 0V1.5h-9a.75.75 0 0 1 0-1.5h9Z" />
               <path d="M6 4.25a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0V5A.75.75 0 0 1 6 4.25Zm0 6a.88.88 0 1 1 0 1.76.88.88 0 0 1 0-1.76Z" />
             </svg>
-            <span>Report Issue</span>
           </a>
           <button
             className="icon-link"
@@ -1969,9 +2026,10 @@ export default function PlaygroundPage() {
       <div className="playground-layout" style={{ position: "relative" }}>
         <section className="pane pane-right">
           <div className="pane-header">
-            <div className="field editor-example-field">
-              <label className="label" htmlFor="examples-select">
-                Examples
+            <div className="field editor-example-field panel-section">
+              <span className="panel-kicker">Examples</span>
+              <label className="panel-title" htmlFor="examples-select">
+                Workflow Template
               </label>
               <div className="editor-toolbar-row example-switcher-row">
                 <select
@@ -1996,59 +2054,41 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="editor-stack">
-            <div className="field">
+            <div className="field panel-section">
               <div className="editor-card-header">
                 <div className="editor-title-block">
-                  <label htmlFor="yaml-editor" className="label">
-                    YAML Workflow Editor
-                  </label>
-                  <p className="editor-help-text">Edit YAML, keep drafts locally, and export a starter snippet.</p>
-                </div>
-              </div>
-              <div className="editor-help-stack">
-                <p className="editor-help-text">
-                  Build or edit a SimpleAgents YAML workflow here. Learn the format in the{" "}
-                  <a href={YAML_WORKFLOW_DOCS_URL} target="_blank" rel="noreferrer">
-                    YAML workflow docs
-                  </a>
-                  .
-                </p>
-                <p className="editor-help-text">
-                  Need help drafting YAML fast? Run <code>{SKILLS_INSTALL_COMMAND}</code> and use the
-                  SimpleAgents skill.
-                </p>
-              </div>
-              <div className="editor-command-bar">
-                <div className="editor-status-stack">
-                  <span className="editor-status-badge">{draftSaveState}</span>
+                  <span className="panel-kicker">Editor</span>
+                  <div className="panel-title-row">
+                    <label htmlFor="yaml-editor" className="panel-title">
+                      YAML Workflow Editor
+                    </label>
+                    <details className="panel-info">
+                      <summary>Info</summary>
+                      <div className="panel-info-content">
+                        <p className="editor-help-text">
+                          Build or edit a SimpleAgents YAML workflow. Learn the format in the{" "}
+                          <a href={YAML_WORKFLOW_DOCS_URL} target="_blank" rel="noreferrer">
+                            YAML workflow docs
+                          </a>
+                          .
+                        </p>
+                        <p className="editor-help-text">
+                          Need faster drafting? Run <code>{SKILLS_INSTALL_COMMAND}</code> and use the
+                          {" "}
+                          SimpleAgents skill.
+                        </p>
+                      </div>
+                    </details>
+                  </div>
+                  <p className="editor-status-inline">{draftSaveState}</p>
                   {copyFeedback ? <span className="editor-feedback-text">{copyFeedback}</span> : null}
                 </div>
-                <div className="editor-command-actions">
-                  <div className="export-control">
-                    <span className="editor-control-label">Current YAML</span>
-                    <button className="btn-secondary editor-action-button" type="button" onClick={() => void copyYaml()}>
-                      Copy YAML
-                    </button>
-                  </div>
-                  <div className="export-control export-control-wide">
-                    <span className="editor-control-label">Export starter code</span>
-                    <div className="editor-toolbar-row export-control-row">
-                      <select
-                        className="editor-inline-select export-language-select editor-action-input"
-                        aria-label="Select export language"
-                        value={copyLanguage}
-                        onChange={(event) => setCopyLanguage(event.target.value as ExportLanguage)}
-                      >
-                        <option value="js">JS/TS</option>
-                        <option value="python">Python</option>
-                        <option value="go">Go</option>
-                      </select>
-                      <button className="btn-primary editor-action-button" type="button" onClick={() => void copyExportCode()}>
-                        Copy Code
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <button className="icon-link icon-action" type="button" onClick={() => void copyYaml()} title="Copy YAML" aria-label="Copy YAML">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3.5 2A1.5 1.5 0 0 0 2 3.5v8A1.5 1.5 0 0 0 3.5 13h6A1.5 1.5 0 0 0 11 11.5v-8A1.5 1.5 0 0 0 9.5 2h-6Zm0 1h6a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-6a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5Z" />
+                    <path d="M6.5 0A1.5 1.5 0 0 1 8 1.5V2H7v-.5a.5.5 0 0 0-.5-.5H6v-1h.5ZM12 4h.5A1.5 1.5 0 0 1 14 5.5v8a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 5 13.5V13h1v.5a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5v-8a.5.5 0 0 0-.5-.5H12V4Z" />
+                  </svg>
+                </button>
               </div>
               <textarea
                 id="yaml-editor"
@@ -2057,6 +2097,28 @@ export default function PlaygroundPage() {
                 value={yamlInput}
                 onChange={(event) => updateActiveDraft({ yaml: event.target.value })}
               />
+              <div className="editor-command-bar compact">
+                <div className="editor-control-group">
+                  <span className="editor-control-label">Export as</span>
+                  <div className="segmented-control" role="tablist" aria-label="Export language">
+                    {EXPORT_LANGUAGES.map((language) => (
+                      <button
+                        key={language.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={copyLanguage === language.id}
+                        className={`segmented-option${copyLanguage === language.id ? " active" : ""}`}
+                        onClick={() => setCopyLanguage(language.id)}
+                      >
+                        {language.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button className="btn-primary editor-action-button" type="button" onClick={() => void copyExportCode()}>
+                  Copy Code
+                </button>
+              </div>
               {yamlErrors.length > 0 ? (
                 <div className="editor-validation error" role="alert">
                   <div className="editor-validation-title">YAML validation errors</div>
@@ -2079,10 +2141,11 @@ export default function PlaygroundPage() {
               ) : null}
             </div>
 
-            <div className="field">
+            <div className="field panel-section">
               <div className="editor-card-header">
                 <div className="editor-title-block">
-                  <label htmlFor="code-editor" className="label">
+                  <span className="panel-kicker">Editor</span>
+                  <label htmlFor="code-editor" className="panel-title">
                     Custom JS/TS Functions
                   </label>
                   <span className="editor-help-text">
@@ -2123,10 +2186,11 @@ export default function PlaygroundPage() {
               ) : null}
             </div>
 
-            <div className="field">
+            <div className="field panel-section">
               <div className="editor-card-header">
                 <div className="editor-title-block">
-                  <label className="label">Sample Chat Inputs</label>
+                  <span className="panel-kicker">Chat</span>
+                  <label className="panel-title">Sample Chat Inputs</label>
                   <span className="editor-help-text">
                     Reuse these prompts for the selected YAML example in the chat panel.
                   </span>
@@ -2243,83 +2307,111 @@ export default function PlaygroundPage() {
             </div>
           </div>
 
-          <div className="flow-area">
-            {hasYamlErrors ? (
-              <div className="editor-validation error" role="alert">
-                <div className="editor-validation-title">Workflow visualizer unavailable</div>
-                {yamlErrors.map((item, index) => (
-                  <p key={`${item.message}-${index}`} className="mono-value">
-                    {formatValidationLabel(item)}
-                  </p>
-                ))}
+          <div className="panel-section output-panel">
+            <div className="output-tabs">
+              <div className="output-tab-list" role="tablist" aria-label="Output section tabs">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={outputTab === "output"}
+                  className={`output-tab${outputTab === "output" ? " active" : ""}`}
+                  onClick={() => setOutputTab("output")}
+                >
+                  Output
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={outputTab === "logs"}
+                  className={`output-tab${outputTab === "logs" ? " active" : ""}`}
+                  onClick={() => setOutputTab("logs")}
+                >
+                  Run Log
+                </button>
               </div>
-            ) : parsedFlow || parsedGraphFlow ? (
-              <>
-                {flowRenderError ? (
-                  <p className="mono-value">{flowRenderError}</p>
-                ) : (
-                  <div
-                    className="mermaid-view"
-                    dangerouslySetInnerHTML={{ __html: flowSvg }}
-                  />
-                )}
-                <details className="mermaid-source">
-                  <summary className="label">Visualize output (Mermaid)</summary>
-                  <div className="mermaid-source-panel">
-                    <pre className="mono-value">{mermaidSource}</pre>
-                  </div>
-                </details>
-              </>
-            ) : (
-              <p>Flow visualizer appears when YAML is valid.</p>
-            )}
-          </div>
-
-          <div className="run-log">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <div className="label">Run Log ({runState})</div>
-              <button
-                className="btn-secondary"
-                type="button"
-                style={{ padding: "6px 10px", fontSize: 12 }}
-                onClick={() => {
-                  setLogs([]);
-                  setStepStreams({});
-                  setRunState("idle");
-                  setActiveStepId(null);
-                }}
-              >
-                Clear logs
-              </button>
+              <span className={`run-state-dot ${runState}`}>● {runState.toUpperCase()}</span>
             </div>
-            {logs.length === 0 ? (
-              <p className="mono-value">No logs yet.</p>
-            ) : (
-              logs.map((line, index) => (
-                <p key={`${line}-${index}`} className="mono-value" style={{ marginBottom: 6 }}>
-                  {line}
-                </p>
-              ))
-            )}
-            {Object.entries(stepStreams).map(([stepId, streamText]) => {
-              const parsed = parseThinkingContent(streamText);
-              return (
-                <details key={stepId} className="stream-block" open>
-                  <summary className="label">Stream: {stepId}</summary>
-                  {parsed.visible.length > 0 ? (
-                    <p className="mono-value" style={{ marginTop: 8 }}>
-                      {parsed.visible}
-                    </p>
-                  ) : null}
-                  {parsed.thinking.map((chunk, idx) => (
-                    <details key={`${stepId}-think-${idx}`} className="think-block">
-                      <summary className="label">Thinking tokens ({idx + 1})</summary>
-                      <pre className="mono-value">{chunk}</pre>
+
+            {outputTab === "output" ? (
+              <div className="flow-area">
+                {hasYamlErrors ? (
+                  <div className="editor-validation error" role="alert">
+                    <div className="editor-validation-title">Workflow visualizer unavailable</div>
+                    {yamlErrors.map((item, index) => (
+                      <p key={`${item.message}-${index}`} className="mono-value">
+                        {formatValidationLabel(item)}
+                      </p>
+                    ))}
+                  </div>
+                ) : parsedFlow || parsedGraphFlow ? (
+                  <>
+                    {flowRenderError ? (
+                      <p className="mono-value">{flowRenderError}</p>
+                    ) : (
+                      <div
+                        className="mermaid-view"
+                        dangerouslySetInnerHTML={{ __html: flowSvg }}
+                      />
+                    )}
+                    <details className="mermaid-source">
+                      <summary className="label">Visualize output (Mermaid)</summary>
+                      <div className="mermaid-source-panel">
+                        <pre className="mono-value">{mermaidSource}</pre>
+                      </div>
                     </details>
-                  ))}
-                </details>
-              );
-            })}
+                  </>
+                ) : (
+                  <p>Flow visualizer appears when YAML is valid.</p>
+                )}
+              </div>
+            ) : (
+              <div className="run-log">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div className="label">Run Log ({runState})</div>
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    style={{ padding: "6px 10px", fontSize: 12 }}
+                    onClick={() => {
+                      setLogs([]);
+                      setStepStreams({});
+                      setRunState("idle");
+                      setActiveStepId(null);
+                    }}
+                  >
+                    Clear logs
+                  </button>
+                </div>
+                {logs.length === 0 ? (
+                  <p className="mono-value">No logs yet.</p>
+                ) : (
+                  logs.map((line, index) => (
+                    <p key={`${line}-${index}`} className="mono-value" style={{ marginBottom: 6 }}>
+                      {line}
+                    </p>
+                  ))
+                )}
+                {Object.entries(stepStreams).map(([stepId, streamText]) => {
+                  const parsed = parseThinkingContent(streamText);
+                  return (
+                    <details key={stepId} className="stream-block" open>
+                      <summary className="label">Stream: {stepId}</summary>
+                      {parsed.visible.length > 0 ? (
+                        <p className="mono-value" style={{ marginTop: 8 }}>
+                          {parsed.visible}
+                        </p>
+                      ) : null}
+                      {parsed.thinking.map((chunk, idx) => (
+                        <details key={`${stepId}-think-${idx}`} className="think-block">
+                          <summary className="label">Thinking tokens ({idx + 1})</summary>
+                          <pre className="mono-value">{chunk}</pre>
+                        </details>
+                      ))}
+                    </details>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className={`chat-drawer ${chatOpen ? "expanded" : "collapsed"}`}>
@@ -2392,24 +2484,38 @@ export default function PlaygroundPage() {
                   )}
                 </div>
                 <div className="chat-input">
-                  <input
-                    placeholder="Send a message"
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        void sendChat();
-                      }
-                    }}
-                  />
-                  <button
-                    className="btn-primary"
-                    type="button"
-                    onClick={() => void sendChat()}
-                    disabled={chatPending}
-                  >
-                    {chatPending ? "Sending..." : "Send"}
-                  </button>
+                  <div className="chat-input-row">
+                    <input
+                      placeholder="Send a message"
+                      value={chatInput}
+                      aria-invalid={chatValidationMessage !== null}
+                      aria-describedby={chatValidationMessage ? "chat-input-validation" : undefined}
+                      onChange={(event) => {
+                        setChatInput(event.target.value);
+                        if (chatValidationMessage !== null && event.target.value.trim().length > 0) {
+                          setChatValidationMessage(null);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void sendChat();
+                        }
+                      }}
+                    />
+                    <button
+                      className="btn-primary chat-send-button"
+                      type="button"
+                      onClick={() => void sendChat()}
+                      disabled={chatPending || isChatInputEmpty}
+                    >
+                      {chatPending ? "Sending..." : "Send"}
+                    </button>
+                  </div>
+                  {chatValidationMessage ? (
+                    <p id="chat-input-validation" className="chat-input-validation" role="alert">
+                      {chatValidationMessage}
+                    </p>
+                  ) : null}
                 </div>
               </>
             ) : null}
