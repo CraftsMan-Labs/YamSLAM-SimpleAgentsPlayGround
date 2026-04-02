@@ -6,7 +6,7 @@ test.describe("Playground chat empty submit validation", () => {
   });
 
   test("keeps Send disabled for blank or whitespace input", async ({ page }) => {
-    const input = page.getByPlaceholder("Send a message");
+    const input = page.getByRole("textbox", { name: "Chat message" });
     const sendButton = page.getByRole("button", { name: "Send" });
 
     await expect(sendButton).toBeDisabled();
@@ -19,7 +19,7 @@ test.describe("Playground chat empty submit validation", () => {
   });
 
   test("shows validation feedback on Enter with blank input", async ({ page }) => {
-    const input = page.getByPlaceholder("Send a message");
+    const input = page.getByRole("textbox", { name: "Chat message" });
 
     await expect(page.locator(".msg")).toHaveCount(0);
     await input.press("Enter");
@@ -29,7 +29,7 @@ test.describe("Playground chat empty submit validation", () => {
   });
 
   test("clears validation and submits once input is valid", async ({ page }) => {
-    const input = page.getByPlaceholder("Send a message");
+    const input = page.getByRole("textbox", { name: "Chat message" });
     const sendButton = page.getByRole("button", { name: "Send" });
 
     await input.press("Enter");
@@ -41,5 +41,19 @@ test.describe("Playground chat empty submit validation", () => {
 
     await sendButton.click();
     await expect(page.locator(".msg.assistant")).toContainText("Add base URL, API key, and model first.");
+  });
+
+  test("does not submit while IME composition is active", async ({ page }) => {
+    const input = page.getByRole("textbox", { name: "Chat message" });
+
+    await input.focus();
+    await page.keyboard.type("konnichiha");
+    await input.evaluate((element) => {
+      const el = element as HTMLInputElement;
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }));
+    });
+
+    await expect(page.locator(".msg")).toHaveCount(0);
+    await expect(page.getByText("Message cannot be empty.")).toHaveCount(0);
   });
 });
