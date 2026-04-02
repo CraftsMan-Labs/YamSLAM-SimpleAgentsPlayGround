@@ -312,19 +312,7 @@ steps:
         prompt: "For the Email Chat Draft example, what kinds of emails can you help draft before I give you a concrete scenario?"
       }
     ],
-    code: `function GetRagData(payload) {
-  const topic = payload && typeof payload.topic === "string" ? payload.topic : "general";
-  const messages = {
-    already_terminated: "This interview session is already terminated.",
-    terminated: "Candidate terminated based on interview policy.",
-    ask_for_context: "Need more scenario context before proceeding."
-  };
-  return {
-    topic,
-    message: messages[topic] || "Worker completed.",
-    source: "custom-js"
-  };
-}`
+    code: ``
   },
   "Python Interview (graph sample)": {
     sampleFile: "python-intern-fun-interview-system.yaml",
@@ -476,12 +464,29 @@ function normalizeProviderError(error: unknown, apiKey: string): string {
   const lower = sanitized.toLowerCase();
 
   if (
+    lower.includes("err_name_not_resolved") ||
+    lower.includes("name_not_resolved") ||
+    lower.includes("dns") ||
+    lower.includes("enotfound") ||
+    lower.includes("could not resolve host")
+  ) {
+    return "Provider host is unreachable (DNS/endpoint issue). Check Base URL and network reachability.";
+  }
+
+  if (
+    lower.includes("cors") ||
+    lower.includes("cross-origin") ||
+    lower.includes("access-control-allow-origin")
+  ) {
+    return "CORS issue: this provider may block browser-origin requests.";
+  }
+
+  if (
     lower.includes("failed to fetch") ||
     lower.includes("networkerror") ||
-    lower.includes("network error") ||
-    lower.includes("cors")
+    lower.includes("network error")
   ) {
-    return "Network/CORS issue: this provider may block browser-origin requests.";
+    return "Network request failed. Check base URL, DNS reachability, and provider browser/CORS support.";
   }
 
   return sanitized;
@@ -1518,6 +1523,7 @@ export default function PlaygroundPage() {
     model: "gpt-4o-mini"
   });
   const draftSaveTimerRef = useRef<number | null>(null);
+  const chatRunSessionRef = useRef(0);
 
   const activeDraft = useMemo(() => getActiveDraftWorkspace(draftStore), [draftStore]);
   const selectedExample = activeDraft.id;
@@ -1841,7 +1847,7 @@ export default function PlaygroundPage() {
 
     if (cachedDraft !== undefined) {
       setDraftStore((prev) => ({ ...prev, lastWorkspaceId: name }));
-      setLogs([`Loaded draft: ${name}`]);
+      resetWorkflowContext(`Loaded draft: ${name}`);
       return;
     }
 
@@ -1856,7 +1862,7 @@ export default function PlaygroundPage() {
           [name]: nextWorkspace
         }
       }));
-      setLogs([`Loaded example: ${name}${example.sampleFile ? ` (${example.sampleFile})` : ""}`]);
+      resetWorkflowContext(`Loaded example: ${name}${example.sampleFile ? ` (${example.sampleFile})` : ""}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load sample file.";
       setLogs([`Failed to load example: ${name}`, message]);
@@ -1876,7 +1882,7 @@ export default function PlaygroundPage() {
           [selectedExample]: nextWorkspace
         }
       }));
-      setLogs([`Reset draft to example defaults: ${selectedExample}`]);
+      resetWorkflowContext(`Reset draft to example defaults: ${selectedExample}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to reset current example.";
       setLogs([`Failed to reset example: ${selectedExample}`, message]);
@@ -1930,6 +1936,18 @@ export default function PlaygroundPage() {
     }
   };
 
+  const resetWorkflowContext = (message: string) => {
+    chatRunSessionRef.current += 1;
+    setRunState("idle");
+    setLogs([message]);
+    setStepStreams({});
+    setActiveStepId(null);
+    setChatMessages([]);
+    setChatInput("");
+    setChatValidationMessage(null);
+    setChatPending(false);
+  };
+
   const sendChat = async () => {
     const prompt = chatInput.trim();
     if (chatPending) {
@@ -1964,6 +1982,7 @@ export default function PlaygroundPage() {
 
     setChatInput("");
     setChatPending(true);
+    const runSessionId = chatRunSessionRef.current;
     setRunState("running");
     setStepStreams({});
     const historyForWorkflow: ChatMessage[] = [...chatMessages, { role: "user", content: prompt }];
@@ -1973,6 +1992,9 @@ export default function PlaygroundPage() {
     setChatMessages(updatedMessages);
 
     const setAssistantContent = (content: string) => {
+      if (runSessionId !== chatRunSessionRef.current) {
+        return;
+      }
       setChatMessages((prev) => {
         if (assistantIndex >= prev.length) {
           return prev;
@@ -1986,6 +2008,9 @@ export default function PlaygroundPage() {
     try {
       let answer: string;
       if (parsedGraphFlow !== null) {
+        if (runSessionId !== chatRunSessionRef.current) {
+          return;
+        }
         setLogs((prev) => [...prev, `Workflow mode: graph (${parsedGraphFlow.entry_node})`]);
         answer = await executeGraphWorkflowForChat({
           yamlSource: yamlInput,
@@ -1998,12 +2023,18 @@ export default function PlaygroundPage() {
             onLog: (line) => setLogs((prev) => [...prev, line]),
             onActiveStep: (stepId) => setActiveStepId(stepId),
             onStepStream: (stepId, content) => {
+              if (runSessionId !== chatRunSessionRef.current) {
+                return;
+              }
               setStepStreams((prev) => ({ ...prev, [stepId]: content }));
               setAssistantContent(`[${stepId}] ${content}`);
             }
           }
         });
       } else {
+        if (runSessionId !== chatRunSessionRef.current) {
+          return;
+        }
         setLogs((prev) => [...prev, "Workflow mode: prompt-grounded chat"]);
         const yamlAwarePrompt = buildYamlAwareChatPrompt({
           yamlSource: yamlInput,
@@ -2013,21 +2044,33 @@ export default function PlaygroundPage() {
         });
         answer = await callProviderStream(config, yamlAwarePrompt, {
           onDelta: (_chunk, aggregate) => {
+            if (runSessionId !== chatRunSessionRef.current) {
+              return;
+            }
             setStepStreams((prev) => ({ ...prev, chat_llm: aggregate }));
             setAssistantContent(aggregate);
           }
         });
         setLogs((prev) => [...prev, "Completed single llm_call from chat context"]);
       }
+      if (runSessionId !== chatRunSessionRef.current) {
+        return;
+      }
       setAssistantContent(answer);
       setRunState("done");
       setLogs((prev) => [...prev, "Chat run complete."]);
     } catch (error) {
+      if (runSessionId !== chatRunSessionRef.current) {
+        return;
+      }
       const message = normalizeProviderError(error, config.apiKey);
       setAssistantContent(message);
       setRunState("failed");
       setLogs((prev) => [...prev, `Run failed: ${message}`]);
     } finally {
+      if (runSessionId !== chatRunSessionRef.current) {
+        return;
+      }
       setChatPending(false);
       setActiveStepId(null);
     }
