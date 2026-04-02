@@ -2486,6 +2486,8 @@ export default function PlaygroundPage() {
                 <div className="chat-input">
                   <div className="chat-input-row">
                     <input
+                      id="chat-message-input"
+                      aria-label="Chat message"
                       placeholder="Send a message"
                       value={chatInput}
                       aria-invalid={chatValidationMessage !== null}
@@ -2497,6 +2499,9 @@ export default function PlaygroundPage() {
                         }
                       }}
                       onKeyDown={(event) => {
+                        if (event.nativeEvent.isComposing || event.keyCode === 229) {
+                          return;
+                        }
                         if (event.key === "Enter") {
                           void sendChat();
                         }
