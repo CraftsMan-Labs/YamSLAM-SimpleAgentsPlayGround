@@ -1,3 +1,5 @@
+import { parseDocument } from "yaml";
+
 export type ExportLanguage = "js" | "python" | "go";
 
 export type PlaygroundExportBundle = {
@@ -42,10 +44,53 @@ function detectWorkflowFunctionNames(yaml: string): string[] {
   return [...names];
 }
 
+function detectCustomWorkerLookupAliases(yaml: string): Array<{ lookupKey: string; handler: string }> {
+  const aliases: Array<{ lookupKey: string; handler: string }> = [];
+
+  try {
+    const parsed = parseDocument(yaml).toJSON();
+    if (parsed === null || typeof parsed !== "object") {
+      return aliases;
+    }
+
+    const nodes = (parsed as { nodes?: unknown }).nodes;
+    if (!Array.isArray(nodes)) {
+      return aliases;
+    }
+
+    for (const node of nodes) {
+      if (node === null || typeof node !== "object") {
+        continue;
+      }
+      const customWorker =
+        (node as { node_type?: { custom_worker?: { handler?: unknown; handler_file?: unknown } } }).node_type
+          ?.custom_worker;
+      const handler = customWorker?.handler;
+      const handlerFile = customWorker?.handler_file;
+      if (
+        typeof handler === "string" &&
+        handler.length > 0 &&
+        typeof handlerFile === "string" &&
+        handlerFile.length > 0
+      ) {
+        aliases.push({ lookupKey: `${handlerFile}#${handler}`, handler });
+      }
+    }
+  } catch {
+    return aliases;
+  }
+
+  return aliases;
+}
+
 function buildJavaScriptExport(input: ExportInput): PlaygroundExportBundle {
   const functionNames = detectWorkflowFunctionNames(input.yaml);
+  const aliasEntries = detectCustomWorkerLookupAliases(input.yaml).map(
+    (entry) => `    ${JSON.stringify(entry.lookupKey)}: typeof ${entry.handler} === "function" ? ${entry.handler} : undefined`
+  );
   const functionEntries = functionNames
     .map((name) => `    ${name}: typeof ${name} === "function" ? ${name} : undefined`)
+    .concat(aliasEntries)
     .join(",\n");
 
   const functionMapBlock =

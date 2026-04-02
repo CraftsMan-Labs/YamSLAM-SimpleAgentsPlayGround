@@ -25,10 +25,15 @@ make install
 make dev
 make test
 make verify
+make run-wasm-chat-history
 ```
 
 - `make test` runs quick checks (`lint` + `typecheck`)
 - `make verify` runs full local verification (`lint` + `typecheck` + `build`)
+- `make run-wasm-chat-history` runs a quick wasm workflow check using `simple-agents-wasm`
+  - Defaults: `WASM_WORKFLOW_YAML=examples/email-chat-draft-or-clarify.yaml`
+  - Pass flags with `WASM_CHAT_FLAGS`, for example:
+    `make run-wasm-chat-history WASM_CHAT_FLAGS='--show-events --message "Draft a concise replacement request email"'`
 
 ## Notes
 
