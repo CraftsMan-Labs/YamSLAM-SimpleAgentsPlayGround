@@ -443,7 +443,7 @@ select:focus-visible {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 20px;
+  gap: 10px;
 }
 
 .social-link {
@@ -504,6 +504,27 @@ select:focus-visible {
   padding: 0;
 }
 
+.icon-link-label {
+  width: auto;
+  padding: 0 12px;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.icon-link-text {
+  line-height: 1;
+}
+
+.theme-toggle-button {
+  min-width: 86px;
+}
+
+.docs-link {
+  min-width: 82px;
+}
+
 .icon-link:hover {
   border-color: var(--dark-stroke);
   color: var(--primary-500);
@@ -513,6 +534,11 @@ select:focus-visible {
   width: 18px;
   height: 18px;
   fill: currentColor;
+}
+
+.icon-link-label svg {
+  width: 15px;
+  height: 15px;
 }
 
 .social-badge {
