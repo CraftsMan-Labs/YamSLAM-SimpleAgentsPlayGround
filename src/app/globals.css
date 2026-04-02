@@ -222,6 +222,18 @@ label,
   color: var(--primary-hover-light);
 }
 
+.btn-primary:disabled {
+  background: #7d8692;
+  color: #d9dee5;
+  border-color: #7d8692;
+  cursor: not-allowed;
+}
+
+.btn-primary:disabled:hover {
+  background: #7d8692;
+  color: #d9dee5;
+}
+
 .btn-primary:focus-visible,
 .btn-secondary:focus-visible,
 .icon-link:focus-visible,
@@ -580,12 +592,16 @@ select:focus-visible {
 }
 
 .panel-info {
+  position: relative;
   border: 1px solid var(--dark-ink);
   border-radius: 8px;
   background: var(--panel-muted);
 }
 
 .panel-info > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   cursor: pointer;
   list-style: none;
   font-size: 11px;
@@ -600,10 +616,33 @@ select:focus-visible {
   display: none;
 }
 
+.panel-info > summary::before {
+  content: "+";
+  font-size: 13px;
+  line-height: 1;
+}
+
+.panel-info[open] > summary::before {
+  content: "-";
+}
+
 .panel-info-content {
-  display: grid;
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(360px, 82vw);
   gap: 8px;
-  padding: 0 10px 10px;
+  padding: 10px;
+  border: 1px solid var(--dark-ink);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  box-shadow: 0 14px 30px rgba(15, 17, 20, 0.22);
+}
+
+.panel-info[open] .panel-info-content {
+  display: grid;
 }
 
 .editor-status-inline {
