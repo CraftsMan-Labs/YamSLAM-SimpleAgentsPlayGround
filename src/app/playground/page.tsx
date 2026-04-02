@@ -2066,7 +2066,7 @@ export default function PlaygroundPage() {
             </svg>
           </a>
           <button
-            className="icon-link"
+            className="icon-link icon-link-label theme-toggle-button"
             type="button"
             aria-label={themeMode === "light" ? "Enable dark mode" : "Enable light mode"}
             title={themeMode === "light" ? "Dark mode" : "Light mode"}
@@ -2084,9 +2084,10 @@ export default function PlaygroundPage() {
               </svg>
             ) : (
               <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M6 0a8 8 0 1 0 8 8 6 6 0 0 1-8-8Z" />
+                <path d="M10.77 11.82A6.5 6.5 0 0 1 4.18 5.23a.75.75 0 0 0-1.22-.66A7.99 7.99 0 1 0 11.43 13a.75.75 0 0 0-.66-1.18Z" />
               </svg>
             )}
+            <span className="icon-link-text">Theme</span>
           </button>
           <a
             className="icon-link"
@@ -2113,7 +2114,7 @@ export default function PlaygroundPage() {
             </svg>
           </a>
           <a
-            className="icon-link"
+            className="icon-link icon-link-label docs-link"
             href="https://docs.simpleagents.craftsmanlabs.net/"
             target="_blank"
             rel="noreferrer"
@@ -2121,9 +2122,10 @@ export default function PlaygroundPage() {
             title="Docs"
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M1.5 1A1.5 1.5 0 0 0 0 2.5v10A1.5 1.5 0 0 0 1.5 14H14V2.5A1.5 1.5 0 0 0 12.5 1h-11ZM14 15H1.5A2.5 2.5 0 0 1-1 12.5v-10A2.5 2.5 0 0 1 1.5 0h11A2.5 2.5 0 0 1 15 2.5V15h-1Z" />
-              <path d="M2.5 2.5h5v9h-5v-9Zm6 0h5v9h-5v-9Z" />
+              <path d="M2.25 2h10A1.75 1.75 0 0 1 14 3.75v8.5A1.75 1.75 0 0 1 12.25 14h-10A1.75 1.75 0 0 1 .5 12.25v-8.5A1.75 1.75 0 0 1 2.25 2Zm0 1A.75.75 0 0 0 1.5 3.75v8.5c0 .41.34.75.75.75h10a.75.75 0 0 0 .75-.75v-8.5a.75.75 0 0 0-.75-.75h-10Z" />
+              <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h3A1.5 1.5 0 0 1 9 4.5V12H4.5A1.5 1.5 0 0 0 3 13.5V4.5Zm10 0A1.5 1.5 0 0 0 11.5 3h-3A1.5 1.5 0 0 0 7 4.5V12h4.5a1.5 1.5 0 0 1 1.5 1.5V4.5Z" />
             </svg>
+            <span className="icon-link-text">Docs</span>
           </a>
           <Link href="/" className="state-link">
             Home
