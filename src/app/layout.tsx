@@ -1,12 +1,20 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono } from "next/font/google";
+import { JetBrains_Mono, Outfit } from "next/font/google";
 import type { ReactNode } from "react";
 import craftsmanLogo from "./assets/CraftsmanLabs.svg";
 import "./globals.css";
 
+const outfit = Outfit({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-outfit",
+  weight: ["400", "500", "700", "900"]
+});
+
 const jetBrainsMono = JetBrains_Mono({
   subsets: ["latin"],
-  display: "swap"
+  display: "swap",
+  variable: "--font-mono"
 });
 
 export const metadata: Metadata = {
@@ -25,8 +33,8 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="dark">
-      <body className={jetBrainsMono.className}>{children}</body>
+    <html lang="en" data-theme="dark" className={`${outfit.variable} ${jetBrainsMono.variable}`}>
+      <body className={outfit.className}>{children}</body>
     </html>
   );
 }

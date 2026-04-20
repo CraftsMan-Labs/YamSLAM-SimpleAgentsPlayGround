@@ -2109,10 +2109,13 @@ export default function PlaygroundPage() {
             </svg>
           </a>
           <button
-            className="icon-link icon-link-label theme-toggle-button"
+            className="theme-switch theme-toggle-button"
             type="button"
-            aria-label={themeMode === "light" ? "Enable dark mode" : "Enable light mode"}
-            title={themeMode === "light" ? "Dark mode" : "Light mode"}
+            role="switch"
+            aria-checked={themeMode === "dark"}
+            data-mode={themeMode}
+            aria-label={themeMode === "light" ? "Switch to dark theme" : "Switch to light theme"}
+            title={themeMode === "light" ? "Dark theme" : "Light theme"}
             onClick={() => {
               setThemeMode((prev) => {
                 const next = prev === "light" ? "dark" : "light";
@@ -2121,16 +2124,15 @@ export default function PlaygroundPage() {
               });
             }}
           >
-            {themeMode === "light" ? (
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M8 1a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 1Zm0 10.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Zm0 3.75a.75.75 0 0 1-.75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A.75.75 0 0 1 8 15Zm7-7a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 15 8ZM4.25 8A.75.75 0 0 1 3.5 8.75H2a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 4.25 8Zm7.53-4.28a.75.75 0 0 1 1.06 0l1.06 1.06a.75.75 0 1 1-1.06 1.06L11.78 4.78a.75.75 0 0 1 0-1.06ZM3.16 12.84a.75.75 0 0 1 1.06 0l1.06 1.06a.75.75 0 1 1-1.06 1.06L3.16 13.9a.75.75 0 0 1 0-1.06Zm10.68 1.06a.75.75 0 0 1-1.06 1.06l-1.06-1.06a.75.75 0 1 1 1.06-1.06l1.06 1.06ZM5.28 5.84A.75.75 0 0 1 4.22 4.78L5.28 3.72a.75.75 0 1 1 1.06 1.06L5.28 5.84Z" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M10.77 11.82A6.5 6.5 0 0 1 4.18 5.23a.75.75 0 0 0-1.22-.66A7.99 7.99 0 1 0 11.43 13a.75.75 0 0 0-.66-1.18Z" />
-              </svg>
-            )}
-            <span className="icon-link-text">Theme</span>
+            <span className="theme-switch__hint" aria-hidden>
+              <span>L</span>
+              <span>D</span>
+            </span>
+            <span
+              className={`theme-switch__thumb ${
+                themeMode === "light" ? "theme-switch__thumb--light" : "theme-switch__thumb--dark"
+              }`}
+            />
           </button>
           <a
             className="icon-link"

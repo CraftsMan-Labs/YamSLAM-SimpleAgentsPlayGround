@@ -45,9 +45,15 @@ export default async function HomePage() {
   const repoStats = await getSimpleAgentsRepoStats();
 
   return (
-    <main>
+    <main className="bauhaus-home">
+      <div className="bauhaus-home-inner">
       <section className="hero">
         <div className="hero-card">
+          <div className="bauhaus-mark" aria-hidden>
+            <span className="bauhaus-mark-dot" />
+            <span className="bauhaus-mark-square" />
+            <span className="bauhaus-mark-triangle" />
+          </div>
           <div className="home-topbar">
             <Image
               src={craftsmanLogoWhite}
@@ -97,29 +103,13 @@ export default async function HomePage() {
             </div>
           </div>
           <div className="label">YamSLAM</div>
-          <h1 className="page-title">SimpleAgents Playground - YamSLAM</h1>
+          <h1 className="page-title">SimpleAgents Playground — YamSLAM</h1>
           <p className="subhead">
             SimpleAgents lets anyone vibe-code LLM agents and ship them
             production-ready with a Rust-first core, Python/Node/Go bindings,
             multi-provider support, YAML workflows, validation,
             tracing/replay, resilience, structured outputs, and eval-ready tooling.
           </p>
-          <div className="repo-stats" aria-label="SimpleAgents repository stats">
-            <article className="repo-stat">
-              <div className="repo-stat-icon">*</div>
-              <div>
-                <div className="label">Stars</div>
-                <div className="repo-stat-value">{repoStats.stars}</div>
-              </div>
-            </article>
-            <article className="repo-stat">
-              <div className="repo-stat-icon">L</div>
-              <div>
-                <div className="label">License</div>
-                <div className="repo-stat-value">{repoStats.license}</div>
-              </div>
-            </article>
-          </div>
           <div className="hero-actions">
             <Link href="/playground" className="btn-primary">
               Open Playground
@@ -138,13 +128,17 @@ export default async function HomePage() {
           </p>
         </div>
         <div className="hero-mock">
-          <div className="label" style={{ color: "#a8b0ba" }}>
-            Preview
+          <div className="bauhaus-hero-shapes" aria-hidden>
+            <span className="bauhaus-shape bauhaus-shape--circle" />
+            <span className="bauhaus-shape bauhaus-shape--square" />
+            <span className="bauhaus-shape bauhaus-shape--triangle" />
           </div>
-          <h3 style={{ marginTop: 12, color: "#f5f7fa" }}>
+          <div className="bauhaus-hero-mock-inner">
+          <div className="label hero-mock-label">Preview</div>
+          <h3 className="hero-mock-title">
             Powered by SimpleAgents WASM runtime
           </h3>
-          <p style={{ marginTop: 12, color: "#e5e7eb" }}>
+          <p className="hero-mock-body">
             Requests run directly in-browser using `simple-agents-wasm` with
             your BYOK credentials.
           </p>
@@ -195,9 +189,29 @@ export default async function HomePage() {
               <strong>simple-agents-core</strong>
             </a>
           </div>
+          </div>
         </div>
       </section>
 
+      <section className="bauhaus-stats-band" aria-label="SimpleAgents repository stats">
+        <div className="repo-stats">
+          <article className="repo-stat">
+            <div className="repo-stat-icon">*</div>
+            <div>
+              <div className="label">Stars</div>
+              <div className="repo-stat-value">{repoStats.stars}</div>
+            </div>
+          </article>
+          <article className="repo-stat">
+            <div className="repo-stat-icon">L</div>
+            <div>
+              <div className="label">License</div>
+              <div className="repo-stat-value">{repoStats.license}</div>
+            </div>
+          </article>
+        </div>
+      </section>
+      </div>
     </main>
   );
 }
