@@ -65,6 +65,42 @@ type WasmClientLike = {
 
 let wasmClientCache: { cacheKey: string; client: WasmClientLike } | null = null;
 
+const PLAYGROUND_LLM_PROXY_PATH = "/api/playground-llm-proxy";
+const PLAYGROUND_TARGET_URL_HEADER = "x-playground-target-url";
+
+/**
+ * Cross-origin OpenAI-compatible APIs (e.g. NVIDIA, many BYOK hosts) block browser
+ * fetch with CORS. Route off-origin requests through the same-origin
+ * /api/playground-llm-proxy so the server performs the provider request.
+ */
+function createPlaygroundProviderFetchImpl(): typeof fetch {
+  return (input, init) => {
+    if (typeof window === "undefined") {
+      return globalThis.fetch(input, init);
+    }
+    const inputUrl = typeof input === "string" ? input : (input as Request).url;
+    let proxyCrossOrigin: boolean;
+    try {
+      const u = new URL(inputUrl, window.location.href);
+      proxyCrossOrigin = u.origin !== window.location.origin;
+    } catch {
+      return window.fetch(input, init);
+    }
+    if (!proxyCrossOrigin) {
+      return window.fetch(input, init);
+    }
+    const nextHeaders = new Headers(init?.headers);
+    nextHeaders.set(PLAYGROUND_TARGET_URL_HEADER, inputUrl);
+    return window.fetch(new URL(PLAYGROUND_LLM_PROXY_PATH, window.location.origin).toString(), {
+      method: "POST",
+      headers: nextHeaders,
+      body: init?.body ?? null,
+      signal: init?.signal,
+      credentials: "omit"
+    });
+  };
+}
+
 async function loadWasmClient(config: ProviderConfig): Promise<WasmClientLike> {
   const cacheKey = `${config.baseUrl}::${config.apiKey}`;
   if (wasmClientCache !== null && wasmClientCache.cacheKey === cacheKey) {
@@ -74,7 +110,7 @@ async function loadWasmClient(config: ProviderConfig): Promise<WasmClientLike> {
   const client = new WasmClient("openai", {
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
-    fetchImpl: (input, init) => window.fetch(input, init)
+    fetchImpl: createPlaygroundProviderFetchImpl()
   });
 
   wasmClientCache = { cacheKey, client };
@@ -1348,9 +1384,18 @@ async function executeGraphWorkflowForChat(input: {
       const llmNode = node as GraphLlmNode;
       input.hooks?.onLog?.(`Step started: ${node.id} (llm_call)`);
       const llm = llmNode.node_type.llm_call;
-      const model = llm.model ?? input.config.model;
+      const model = input.config.model;
       if (typeof model !== "string" || model.trim().length === 0) {
-        throw new Error(`llm_call node '${node.id}' requires model`);
+        throw new Error(`llm_call node '${node.id}' requires model (set Model in provider config)`);
+      }
+      if (
+        typeof llm.model === "string" &&
+        llm.model.trim().length > 0 &&
+        llm.model !== model
+      ) {
+        input.hooks?.onLog?.(
+          `Note: node '${node.id}' lists model '${llm.model}'; using provider model '${model}'.`
+        );
       }
 
       const prompt = interpolateGraphTemplate(llmNode.config?.prompt ?? "", graphContext);
