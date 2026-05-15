@@ -439,6 +439,48 @@ steps:
   };
   return stakeholderMap[company_name] || "unknown";
 }`
+  },
+  "Invoice HITL Review (graph sample)": {
+    sampleFile: "invoice-hitl-approve-reject.yaml",
+    chatInputs: [
+      {
+        label: "Start HITL run",
+        prompt: "Use the Invoice HITL Review example and run it until it asks for a human decision."
+      },
+      {
+        label: "Explain pause",
+        prompt: "For the Invoice HITL Review example, explain where the workflow pauses and what input is needed next."
+      }
+    ],
+    code: `function save_invoice_review(args) {
+  return {
+    ok: true,
+    saved_at: new Date().toISOString(),
+    payload: args && args.payload ? args.payload : null
+  };
+}`
+  },
+  "RAG Eval Workflow (graph sample)": {
+    sampleFile: "rag-eval-workflow.yaml",
+    chatInputs: [
+      {
+        label: "Run eval graph",
+        prompt: "Run the RAG Eval Workflow and show the structured output."
+      },
+      {
+        label: "Eval readiness",
+        prompt: "Explain why this workflow is suitable for eval datasets and code-side evaluators."
+      }
+    ],
+    code: `function mock_retrieve_chunks(args) {
+  return {
+    query: args && args.payload ? args.payload.query : null,
+    chunks: [
+      { id: "policy-1", text: "Refunds are allowed within 30 days with a receipt." },
+      { id: "policy-2", text: "Digital purchases are non-refundable after download." }
+    ]
+  };
+}`
   }
 };
 

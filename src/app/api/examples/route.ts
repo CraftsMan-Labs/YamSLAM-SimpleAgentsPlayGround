@@ -8,7 +8,9 @@ const ALLOWED_EXAMPLES = new Set([
   "email-hierarchical-classification-with-finance-enrichment.yaml",
   "email-chat-draft-or-clarify.yaml",
   "python-intern-fun-interview-system.yaml",
-  "quick-hello-steps.yaml"
+  "quick-hello-steps.yaml",
+  "invoice-hitl-approve-reject.yaml",
+  "rag-eval-workflow.yaml"
 ]);
 
 export async function GET(request: Request) {

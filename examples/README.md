@@ -6,6 +6,8 @@ These files are copied/adapted from the SimpleAgents examples so they can be use
 - `email-hierarchical-classification-with-finance-enrichment.yaml`
 - `python-intern-fun-interview-system.yaml`
 - `quick-hello-steps.yaml`
+- `invoice-hitl-approve-reject.yaml` (HITL)
+- `rag-eval-workflow.yaml` (eval-ready graph)
 
 Usage:
 
