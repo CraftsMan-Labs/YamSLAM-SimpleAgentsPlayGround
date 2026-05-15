@@ -188,7 +188,20 @@ type GraphCustomWorkerNode = {
   };
 };
 
-type GraphNode = GraphLlmNode | GraphSwitchNode | GraphCustomWorkerNode;
+type GraphHumanInputNode = {
+  id: string;
+  node_type: {
+    human_input: {
+      input_type?: "choice" | "text" | "form";
+      prompt?: string;
+      options?: Array<{ value?: string; label?: string }>;
+      form_schema?: unknown;
+      form_prefill?: unknown;
+    };
+  };
+};
+
+type GraphNode = GraphLlmNode | GraphSwitchNode | GraphCustomWorkerNode | GraphHumanInputNode;
 
 type GraphWorkflowDoc = {
   id?: string;
@@ -597,6 +610,9 @@ function getGraphNodeClass(node: GraphNode): string {
   if ("switch" in node.node_type) {
     return "nodeSwitch";
   }
+  if ("human_input" in node.node_type) {
+    return "nodeHuman";
+  }
   return "nodeFunction";
 }
 
@@ -659,6 +675,7 @@ function flowToMermaid(flow: FlowDoc, activeStepId: string | null): string {
   lines.push("  classDef nodeLlm fill:#152735,stroke:#51a7e6,color:#d7efff,stroke-width:1px;");
   lines.push("  classDef nodeOutput fill:#3a2e14,stroke:#d8ad42,color:#fff0c4,stroke-width:1px;");
   lines.push("  classDef nodeSwitch fill:#1e2b35,stroke:#6e8da7,color:#deedf7,stroke-width:1px;");
+  lines.push("  classDef nodeHuman fill:#32254a,stroke:#ad85de,color:#f2e8ff,stroke-width:1px;");
   lines.push("  classDef nodeFunction fill:#33241e,stroke:#c08457,color:#fde9dd,stroke-width:1px;");
 
   return lines.join("\n");
@@ -709,6 +726,7 @@ function graphFlowToMermaid(flow: GraphWorkflowDoc, activeStepId: string | null)
   lines.push("  classDef nodeLlm fill:#152735,stroke:#51a7e6,color:#d7efff,stroke-width:1px;");
   lines.push("  classDef nodeOutput fill:#3a2e14,stroke:#d8ad42,color:#fff0c4,stroke-width:1px;");
   lines.push("  classDef nodeSwitch fill:#1e2b35,stroke:#6e8da7,color:#deedf7,stroke-width:1px;");
+  lines.push("  classDef nodeHuman fill:#32254a,stroke:#ad85de,color:#f2e8ff,stroke-width:1px;");
   lines.push("  classDef nodeFunction fill:#33241e,stroke:#c08457,color:#fde9dd,stroke-width:1px;");
 
   return lines.join("\n");
@@ -1014,7 +1032,7 @@ function validateGraphSemantics(flow: GraphWorkflowDoc): ValidationMessage[] {
   const ids = new Set<string>();
   const idList = flow.nodes.map((node) => node.id);
   const idSet = new Set(idList);
-  const supportedTypes = new Set(["llm_call", "switch", "custom_worker"]);
+  const supportedTypes = new Set(["llm_call", "switch", "custom_worker", "human_input"]);
 
   flow.nodes.forEach((node, index) => {
     if (ids.has(node.id)) {
@@ -1038,6 +1056,30 @@ function validateGraphSemantics(flow: GraphWorkflowDoc): ValidationMessage[] {
       if (!handler || handler.trim().length === 0) {
         messages.push(
           toValidationMessage("graph", "error", `Custom worker node '${node.id}' requires a handler.`)
+        );
+      }
+    }
+
+    if ("human_input" in node.node_type) {
+      const hitl = node.node_type.human_input;
+      const inputType = hitl?.input_type;
+      if (inputType !== "choice" && inputType !== "text" && inputType !== "form") {
+        messages.push(
+          toValidationMessage(
+            "graph",
+            "error",
+            `human_input node '${node.id}' must set input_type to 'choice', 'text', or 'form'.`
+          )
+        );
+      }
+      if (inputType === "choice" && (!Array.isArray(hitl?.options) || hitl.options.length === 0)) {
+        messages.push(
+          toValidationMessage("graph", "error", `human_input node '${node.id}' requires non-empty options for choice input.`)
+        );
+      }
+      if (inputType === "form" && (hitl?.form_schema === undefined || hitl.form_schema === null)) {
+        messages.push(
+          toValidationMessage("graph", "warning", `human_input node '${node.id}' should define form_schema for form input.`)
         );
       }
     }
@@ -1492,6 +1534,35 @@ async function executeGraphWorkflowForChat(input: {
       pointer = nextTargets[0] ?? "";
       input.hooks?.onLog?.(`Step completed: ${node.id}`);
       continue;
+    }
+
+    if ("human_input" in node.node_type) {
+      const humanInputNode = node as GraphHumanInputNode;
+      const hitl = humanInputNode.node_type.human_input;
+      const inputType = hitl?.input_type ?? "text";
+      const prompt = interpolateGraphTemplate(hitl?.prompt ?? "Human input required.", graphContext);
+      input.hooks?.onLog?.(`Step started: ${node.id} (human_input:${inputType})`);
+      (graphContext.nodes as Record<string, unknown>)[node.id] = {
+        output: null,
+        awaiting_human_input: true,
+        request: {
+          input_type: inputType,
+          prompt,
+          options: hitl?.options ?? null,
+          form_schema: hitl?.form_schema ?? null,
+          form_prefill: hitl?.form_prefill ?? null
+        }
+      };
+      output = {
+        status: "awaiting_human_input",
+        node_id: node.id,
+        input_type: inputType,
+        prompt,
+        options: hitl?.options ?? null
+      };
+      input.hooks?.onStepStream?.(node.id, prompt);
+      input.hooks?.onLog?.(`Paused at human_input node '${node.id}' awaiting manual response.`);
+      break;
     }
 
     throw new Error(`Unsupported node_type for node '${node.id}'`);
